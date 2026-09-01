@@ -1,0 +1,10 @@
+# Local odds files, projection imports, settings, and runtime state
+data/
+bestbets.json
+.agents/
+
+# Python/test-generated files
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
