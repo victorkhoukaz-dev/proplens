@@ -49,7 +49,7 @@
       const sizing = document.createElement('div');
       sizing.className = 'metric-box';
       sizing.dataset.sizingNote = 'true';
-      sizing.innerHTML = `<span>Optional model sizing ceiling</span><strong>$${Number(value.suggested_stake || 0).toFixed(2)}</strong>`;
+      sizing.innerHTML = `<span>Optional model stake suggestion</span><strong>$${Number(value.suggested_stake || 0).toFixed(2)}</strong>`;
       metricGrid.append(sizing);
     }
     if (latestEvaluation.prop.market === 'anytime_td' && !resultContent.querySelector('[data-td-note]')) {
@@ -108,7 +108,7 @@
     const response = await originalFetch(...args);
     const requestUrl = String(args[0]);
     if (response.ok && requestUrl.includes('/api/evaluator/evaluate')) {
-      response.clone().json().then(data => { latestEvaluation = data; setTimeout(addEvaluationClarity, 0); }).catch(() => {});
+      response.clone().json().then(data => { latestEvaluation = data; window.proplensLatestEvaluation = data; setTimeout(addEvaluationClarity, 0); }).catch(() => {});
     }
     return response;
   };

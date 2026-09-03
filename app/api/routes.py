@@ -21,6 +21,7 @@ from app.adapters.oddspapi_adapter import OddsPapiAdapter
 from app.core.normalizer import PlayerNameNormalizer, TeamNormalizer
 from app.core.distributions import DistributionEngine, DistributionType
 from app.core.ev import EVEngine, KellyConfig
+from app.db.bet_tracker_store import TrackedBetNotFoundError, bet_tracker_store
 from app.db.cache import cache
 from app.db.loaded_data_store import loaded_data_store
 from app.db.projection_snapshot_store import (
@@ -139,6 +140,70 @@ class PropEvaluationRequest(BaseModel):
     def validate_stake(cls, value: float | None) -> float | None:
         if value is not None and value < 0:
             raise ValueError("Stake cannot be negative.")
+        return value
+
+
+class TrackedBetCreateRequest(BaseModel):
+    player_name: str
+    team: str
+    opponent: str | None = None
+    market: str
+    side_label: str
+    line: float
+    decimal_odds: float
+    stake: float
+    bet_type: Literal["cash", "bonus"]
+    projection_mean: float
+    model_win_probability: float
+    model_fair_decimal: float
+    expected_value_pct: float
+    source_context: dict[str, Any] | None = None
+
+    @field_validator("stake")
+    @classmethod
+    def validate_tracker_stake(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("Enter a stake greater than $0 to save a bet.")
+        return value
+
+    @field_validator("decimal_odds")
+    @classmethod
+    def validate_tracker_odds(cls, value: float) -> float:
+        if value <= 1:
+            raise ValueError("Decimal odds must be above 1.00.")
+        return value
+
+
+class TrackedBetSettleRequest(BaseModel):
+    status: Literal["won", "lost", "push", "cashed_out", "cancelled"]
+    settlement_amount: float | None = None
+
+    @field_validator("settlement_amount")
+    @classmethod
+    def validate_settlement_amount(cls, value: float | None) -> float | None:
+        if value is not None and value < 0:
+            raise ValueError("Cash-out amount cannot be negative.")
+        return value
+
+
+class TrackedBetUpdateRequest(BaseModel):
+    stake: float | None = None
+    bet_type: Literal["cash", "bonus"] | None = None
+    line: float | None = None
+    decimal_odds: float | None = None
+
+    @field_validator("stake")
+    @classmethod
+    def validate_updated_stake(cls, value: float | None) -> float | None:
+        if value is not None and value <= 0:
+            raise ValueError("Stake must be greater than $0.")
+        return value
+
+    @field_validator("decimal_odds")
+    @classmethod
+    def validate_updated_odds(cls, value: float | None) -> float | None:
+        if value is not None and value <= 1:
+            raise ValueError("Decimal odds must be above 1.00.")
         return value
 
 
@@ -381,6 +446,48 @@ def evaluate_manual_prop(payload: PropEvaluationRequest) -> dict[str, Any]:
             "No sharp-book comparison was used for this result.",
         ],
     }
+
+
+@router.get("/tracker/bets")
+def list_tracked_bets() -> dict[str, Any]:
+    """Return locally stored straight bets and their cash-aware summary."""
+    return {"bets": bet_tracker_store.list(), "summary": bet_tracker_store.summary()}
+
+
+@router.post("/tracker/bets")
+def create_tracked_bet(payload: TrackedBetCreateRequest) -> dict[str, Any]:
+    """Save an already-evaluated straight prop; this never places a bet."""
+    source_context = payload.source_context
+    if not source_context:
+        library = projection_snapshot_store.list_summaries()
+        source_context = next((snapshot for snapshot in library["snapshots"] if snapshot["active"]), None)
+    bet = bet_tracker_store.create({**payload.model_dump(), "source_context": source_context})
+    return {"success": True, "bet": bet, "summary": bet_tracker_store.summary()}
+
+
+@router.put("/tracker/bets/{bet_id}")
+def update_tracked_bet(bet_id: str, payload: TrackedBetUpdateRequest) -> dict[str, Any]:
+    changes = payload.model_dump(exclude_unset=True)
+    if not changes:
+        raise HTTPException(status_code=400, detail="Choose at least one value to update.")
+    try:
+        bet = bet_tracker_store.update(bet_id, changes)
+    except TrackedBetNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Tracked bet not found.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"success": True, "bet": bet, "summary": bet_tracker_store.summary()}
+
+
+@router.post("/tracker/bets/{bet_id}/settle")
+def settle_tracked_bet(bet_id: str, payload: TrackedBetSettleRequest) -> dict[str, Any]:
+    try:
+        bet = bet_tracker_store.settle(bet_id, payload.status, payload.settlement_amount)
+    except TrackedBetNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Tracked bet not found.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"success": True, "bet": bet, "summary": bet_tracker_store.summary()}
 
 
 @router.post("/settings")
