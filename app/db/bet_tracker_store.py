@@ -81,11 +81,22 @@ class BetTrackerStore:
                 if bet["id"] != bet_id:
                     continue
                 bet.update(changes)
-                if bet["status"] != "pending":
+                if bet["status"] == "pending":
+                    bet.update({"profit": None, "settlement_amount": None, "settled_at": None})
+                else:
                     bet["profit"] = self._profit(bet, bet["status"], bet.get("settlement_amount"))
+                    bet["settled_at"] = bet.get("settled_at") or datetime.now(timezone.utc).isoformat()
                 self._write(bets)
                 return bet
         raise TrackedBetNotFoundError(bet_id)
+
+    def delete(self, bet_id: str) -> None:
+        with self._lock:
+            bets = self._read()
+            remaining = [bet for bet in bets if bet["id"] != bet_id]
+            if len(remaining) == len(bets):
+                raise TrackedBetNotFoundError(bet_id)
+            self._write(remaining)
 
     def summary(self) -> dict[str, float | int]:
         bets = self.list()

@@ -87,6 +87,22 @@ def test_evaluator_requires_matching_projection(client):
     assert "No matching projection" in response.json()["detail"]
 
 
+def test_evaluator_handles_a_low_yardage_line_without_invalid_fair_price(client):
+    response = client.post(
+        "/api/evaluator/evaluate",
+        json={
+            "player_name": "Josh Allen",
+            "stat_category": "passing_yards",
+            "side": "over",
+            "line": 8,
+            "odds": 1.9,
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["model"]["fair_decimal"] == 1.0
+    assert response.json()["model"]["fair_american"] is None
+
+
 def test_anytime_touchdown_requires_yes_selection(client):
     response = client.post(
         "/api/evaluator/evaluate",

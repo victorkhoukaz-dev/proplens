@@ -106,3 +106,19 @@ def test_tracker_supports_cashout_and_corrections_after_settlement(client):
     corrected = client.put(f"/api/tracker/bets/{bet['id']}", json={"stake": 5})
     assert corrected.status_code == 200
     assert corrected.json()["bet"]["profit"] == 3.25
+
+
+def test_tracker_can_correct_result_and_delete_a_bet(client):
+    payload = {
+        "player_name": "Saquon Barkley", "team": "PHI", "market": "rushing_yards", "side_label": "Over",
+        "line": 70.5, "decimal_odds": 2.0, "stake": 10, "bet_type": "cash", "projection_mean": 70.5,
+        "model_win_probability": 0.5, "model_fair_decimal": 2.0, "expected_value_pct": 0,
+    }
+    bet = client.post("/api/tracker/bets", json=payload).json()["bet"]
+    client.post(f"/api/tracker/bets/{bet['id']}/settle", json={"status": "won"})
+    corrected = client.put(f"/api/tracker/bets/{bet['id']}", json={"status": "push"})
+    assert corrected.status_code == 200
+    assert corrected.json()["bet"]["profit"] == 0.0
+    deleted = client.delete(f"/api/tracker/bets/{bet['id']}")
+    assert deleted.status_code == 200
+    assert client.get("/api/tracker/bets").json()["bets"] == []

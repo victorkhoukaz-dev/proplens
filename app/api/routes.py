@@ -191,6 +191,8 @@ class TrackedBetUpdateRequest(BaseModel):
     bet_type: Literal["cash", "bonus"] | None = None
     line: float | None = None
     decimal_odds: float | None = None
+    status: Literal["pending", "won", "lost", "push", "cashed_out", "cancelled"] | None = None
+    settlement_amount: float | None = None
 
     @field_validator("stake")
     @classmethod
@@ -204,6 +206,13 @@ class TrackedBetUpdateRequest(BaseModel):
     def validate_updated_odds(cls, value: float | None) -> float | None:
         if value is not None and value <= 1:
             raise ValueError("Decimal odds must be above 1.00.")
+        return value
+
+    @field_validator("settlement_amount")
+    @classmethod
+    def validate_updated_settlement_amount(cls, value: float | None) -> float | None:
+        if value is not None and value < 0:
+            raise ValueError("Cash-out amount cannot be negative.")
         return value
 
 
@@ -377,7 +386,7 @@ def evaluate_manual_prop(payload: PropEvaluationRequest) -> dict[str, Any]:
     is_over = payload.side in {"over", "yes"}
     model_probability = distribution.conditional_prob_over if is_over else distribution.conditional_prob_under
     fair_decimal = distribution.fair_decimal_over if is_over else distribution.fair_decimal_under
-    fair_american = EVEngine.decimal_to_american(fair_decimal)
+    fair_american = EVEngine.decimal_to_american(fair_decimal) if fair_decimal > 1.0 else None
 
     settings = cache.get_settings()
     kelly_config = KellyConfig(
@@ -477,6 +486,15 @@ def update_tracked_bet(bet_id: str, payload: TrackedBetUpdateRequest) -> dict[st
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"success": True, "bet": bet, "summary": bet_tracker_store.summary()}
+
+
+@router.delete("/tracker/bets/{bet_id}")
+def delete_tracked_bet(bet_id: str) -> dict[str, Any]:
+    try:
+        bet_tracker_store.delete(bet_id)
+    except TrackedBetNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Tracked bet not found.") from exc
+    return {"success": True, "summary": bet_tracker_store.summary()}
 
 
 @router.post("/tracker/bets/{bet_id}/settle")
