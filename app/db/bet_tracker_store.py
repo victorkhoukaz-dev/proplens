@@ -98,15 +98,31 @@ class BetTrackerStore:
                 raise TrackedBetNotFoundError(bet_id)
             self._write(remaining)
 
-    def summary(self) -> dict[str, float | int]:
+    def summary(self, include_pending: bool = True) -> dict[str, float | int | None]:
         bets = self.list()
         settled = [bet for bet in bets if bet["status"] != "pending"]
-        cash = [bet for bet in settled if bet["bet_type"] == "cash"]
-        bonus = [bet for bet in settled if bet["bet_type"] == "bonus"]
+        wagered_bets = bets if include_pending else settled
+        cash_wagered = [bet for bet in wagered_bets if bet["bet_type"] == "cash" and bet["status"] != "cancelled"]
+        # Cancelled bets never entered play, so neither cash nor a bonus value was actually risked.
+        cash = [bet for bet in settled if bet["bet_type"] == "cash" and bet["status"] != "cancelled"]
+        bonus = [bet for bet in settled if bet["bet_type"] == "bonus" and bet["status"] != "cancelled"]
+        bonus_wagered = [bet for bet in wagered_bets if bet["bet_type"] == "bonus" and bet["status"] != "cancelled"]
         cash_staked = round(sum(float(bet["stake"]) for bet in cash), 2)
         cash_profit = round(sum(float(bet["profit"] or 0) for bet in cash), 2)
         bonus_profit = round(sum(float(bet["profit"] or 0) for bet in bonus), 2)
-        return {"total_bets": len(bets), "pending": len(bets) - len(settled), "cash_staked": cash_staked, "cash_profit": cash_profit, "bonus_stake_used": round(sum(float(bet["stake"]) for bet in bonus), 2), "bonus_profit": bonus_profit, "total_profit": round(cash_profit + bonus_profit, 2), "cash_roi_pct": round((cash_profit / cash_staked * 100) if cash_staked else 0, 2)}
+        total_profit = round(cash_profit + bonus_profit, 2)
+        return {
+            "total_bets": len(bets),
+            "pending": len(bets) - len(settled),
+            "cash_wagered": round(sum(float(bet["stake"]) for bet in cash_wagered), 2),
+            "cash_staked": cash_staked,
+            "cash_profit": cash_profit,
+            "bonus_stake_used": round(sum(float(bet["stake"]) for bet in bonus_wagered), 2),
+            "bonus_profit": bonus_profit,
+            "total_profit": total_profit,
+            "cash_roi_pct": round(cash_profit / cash_staked * 100, 2) if cash_staked else None,
+            "total_roi_on_cash_risk_pct": round(total_profit / cash_staked * 100, 2) if cash_staked else None,
+        }
 
 
 bet_tracker_store = BetTrackerStore()

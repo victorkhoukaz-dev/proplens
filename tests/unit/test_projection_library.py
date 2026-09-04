@@ -91,6 +91,51 @@ def test_tracker_calculates_bonus_bets_without_a_cash_loss(client):
     assert tracker["summary"]["cash_profit"] == 15.0
     assert tracker["summary"]["bonus_profit"] == 0.0
     assert tracker["summary"]["bonus_stake_used"] == 10.0
+    assert tracker["summary"]["total_profit"] == 15.0
+    assert tracker["summary"]["cash_roi_pct"] == 150.0
+    assert tracker["summary"]["total_roi_on_cash_risk_pct"] == 150.0
+
+
+def test_tracker_separates_cash_bet_roi_from_total_roi_on_cash_risk(client):
+    payload = {
+        "player_name": "Saquon Barkley", "team": "PHI", "opponent": "DAL", "market": "rushing_yards",
+        "side_label": "Over", "line": 70.5, "stake": 5, "projection_mean": 70.5,
+        "model_win_probability": 0.5, "model_fair_decimal": 2.0, "expected_value_pct": 5,
+    }
+    cash = client.post("/api/tracker/bets", json={**payload, "decimal_odds": 2.65, "bet_type": "cash"}).json()["bet"]
+    bonus = client.post("/api/tracker/bets", json={**payload, "decimal_odds": 1.60, "bet_type": "bonus"}).json()["bet"]
+    client.post(f"/api/tracker/bets/{cash['id']}/settle", json={"status": "won"})
+    client.post(f"/api/tracker/bets/{bonus['id']}/settle", json={"status": "won"})
+
+    summary = client.get("/api/tracker/bets").json()["summary"]
+    assert summary["cash_profit"] == 8.25
+    assert summary["bonus_profit"] == 3.0
+    assert summary["total_profit"] == 11.25
+    assert summary["cash_wagered"] == 5.0
+    assert summary["cash_staked"] == 5.0
+    assert summary["bonus_stake_used"] == 5.0
+    assert summary["cash_roi_pct"] == 165.0
+    assert summary["total_roi_on_cash_risk_pct"] == 225.0
+
+
+def test_tracker_can_exclude_pending_bets_from_wager_totals(client):
+    payload = {
+        "player_name": "Saquon Barkley", "team": "PHI", "opponent": "DAL", "market": "rushing_yards",
+        "side_label": "Over", "line": 70.5, "decimal_odds": 2.0, "projection_mean": 70.5,
+        "model_win_probability": 0.5, "model_fair_decimal": 2.0, "expected_value_pct": 0,
+    }
+    settled_cash = client.post("/api/tracker/bets", json={**payload, "stake": 5, "bet_type": "cash"}).json()["bet"]
+    client.post(f"/api/tracker/bets/{settled_cash['id']}/settle", json={"status": "won"})
+    client.post("/api/tracker/bets", json={**payload, "stake": 7, "bet_type": "cash"})
+    client.post("/api/tracker/bets", json={**payload, "stake": 3, "bet_type": "bonus"})
+
+    included = client.get("/api/tracker/bets").json()["summary"]
+    excluded = client.get("/api/tracker/bets?include_pending=false").json()["summary"]
+    assert included["cash_wagered"] == 12.0
+    assert included["bonus_stake_used"] == 3.0
+    assert excluded["cash_wagered"] == 5.0
+    assert excluded["bonus_stake_used"] == 0.0
+    assert included["cash_profit"] == excluded["cash_profit"] == 5.0
 
 
 def test_tracker_supports_cashout_and_corrections_after_settlement(client):

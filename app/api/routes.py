@@ -458,9 +458,9 @@ def evaluate_manual_prop(payload: PropEvaluationRequest) -> dict[str, Any]:
 
 
 @router.get("/tracker/bets")
-def list_tracked_bets() -> dict[str, Any]:
+def list_tracked_bets(include_pending: bool = True) -> dict[str, Any]:
     """Return locally stored straight bets and their cash-aware summary."""
-    return {"bets": bet_tracker_store.list(), "summary": bet_tracker_store.summary()}
+    return {"bets": bet_tracker_store.list(), "summary": bet_tracker_store.summary(include_pending=include_pending)}
 
 
 @router.post("/tracker/bets")
