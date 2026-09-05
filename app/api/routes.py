@@ -338,6 +338,84 @@ def get_evaluator_players(q: str = Query("", max_length=80), limit: int = Query(
     }
 
 
+@router.get("/evaluator/browse")
+def browse_evaluator_players(
+    position: str = Query("all", max_length=8),
+    game: str = Query("all", max_length=30),
+    sort_market: str = Query("rushing_yards", max_length=40),
+    limit: int = Query(30, ge=1, le=50),
+) -> dict[str, Any]:
+    """Return active-set players for the compact projection browser.
+
+    This deliberately reads the same loaded projections as the existing player
+    search. It does not fetch odds or mutate an imported projection set.
+    """
+    allowed_markets = {market.value for market in EVALUATOR_MARKETS}
+    if sort_market not in allowed_markets:
+        raise HTTPException(status_code=400, detail="Choose a supported projection market to sort by.")
+
+    normalized_position = position.strip().upper()
+    normalized_game = game.strip().upper()
+    projections = cache.get_projections()
+
+    def projection_game_key(projection: PlayerProjection) -> str | None:
+        if not projection.team or not projection.opponent:
+            return None
+        return "|".join(sorted((projection.team.upper(), projection.opponent.upper())))
+
+    games: dict[str, str] = {}
+    for projection in projections:
+        game_key = projection_game_key(projection)
+        if game_key and game_key not in games:
+            games[game_key] = f"{projection.team.upper()} vs {projection.opponent.upper()}"
+
+    players: dict[str, dict[str, Any]] = {}
+    for projection in projections:
+        if projection.stat_category not in EVALUATOR_MARKETS:
+            continue
+        if normalized_position != "ALL" and projection.position.upper() != normalized_position:
+            continue
+        if normalized_game != "ALL" and projection_game_key(projection) != normalized_game:
+            continue
+
+        display_name = projection.canonical_name or projection.player_name
+        key = _projection_key(projection)
+        player = players.setdefault(
+            key,
+            {
+                "player_name": display_name,
+                "team": projection.team,
+                "opponent": projection.opponent,
+                "position": projection.position,
+                "markets": [],
+                "projections": {},
+            },
+        )
+        market = projection.stat_category.value
+        if market not in player["markets"]:
+            player["markets"].append(market)
+        player["projections"][market] = projection.projection_mean
+
+    ordered = sorted(
+        players.values(),
+        key=lambda player: (
+            player["projections"].get(sort_market) is None,
+            -float(player["projections"].get(sort_market, 0)),
+            player["player_name"].lower(),
+        ),
+    )[:limit]
+    positions = sorted({str(player.position).upper() for player in projections if player.stat_category in EVALUATOR_MARKETS})
+    library = projection_snapshot_store.list_summaries()
+    active_context = next((snapshot for snapshot in library["snapshots"] if snapshot["active"]), None)
+    return {
+        "players": ordered,
+        "positions": positions,
+        "games": [{"key": key, "label": label} for key, label in sorted(games.items(), key=lambda item: item[1])],
+        "sort_market": sort_market,
+        "projection_context": active_context,
+    }
+
+
 @router.post("/evaluator/evaluate")
 def evaluate_manual_prop(payload: PropEvaluationRequest) -> dict[str, Any]:
     """Evaluate one manual Bet365 player prop from an exact loaded projection.

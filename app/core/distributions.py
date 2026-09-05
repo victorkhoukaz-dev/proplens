@@ -2,7 +2,7 @@
 app.core.distributions: High-performance statistical probability engine for NFL player props.
 
 Supports:
-- Continuous yardage distributions (Log-Normal, Calibrated Normal) with empirical positional CVs.
+- Continuous yardage distributions (Log-Normal, Calibrated Normal) with market-first empirical CVs.
 - Discrete count distributions (Poisson, Negative Binomial) with empirical overdispersion alphas.
 - Continuity corrections on whole-number lines vs half-point lines.
 - Exact calculation of P(Over), P(Under), P(Push), conditional win probabilities, and fair decimal odds.
@@ -105,16 +105,16 @@ class DistributionEngine:
         position: Optional[Union[str, Position]] = None,
         stat_category: Optional[Union[str, StatCategory]] = None,
     ) -> float:
-        """Resolve empirical default CV from position or stat category."""
-        if position:
-            pos_key = position.value.upper() if isinstance(position, Position) else str(position).upper().strip()
-            if pos_key in cls.DEFAULT_POSITIONAL_CV:
-                return cls.DEFAULT_POSITIONAL_CV[pos_key]
-
+        """Resolve default CV from the market first, then use position as a fallback."""
         if stat_category:
             cat_key = stat_category.value.lower() if isinstance(stat_category, StatCategory) else str(stat_category).lower().strip()
             if cat_key in cls.DEFAULT_STAT_CATEGORY_CV:
                 return cls.DEFAULT_STAT_CATEGORY_CV[cat_key]
+
+        if position:
+            pos_key = position.value.upper() if isinstance(position, Position) else str(position).upper().strip()
+            if pos_key in cls.DEFAULT_POSITIONAL_CV:
+                return cls.DEFAULT_POSITIONAL_CV[pos_key]
 
         return 0.50
 

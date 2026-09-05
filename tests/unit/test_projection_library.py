@@ -57,6 +57,31 @@ def test_pasted_projection_import_creates_active_week_snapshot(client):
     assert players["players"][0]["projections"]["rushing_yards"] == 70.5
 
 
+def test_projection_browser_filters_position_and_sorts_by_market(client):
+    content = """Player,Team,Pos,Opp,Rush Yds,Rec Yds
+Saquon Barkley,PHI,RB,DAL,70.5,22.0
+Derrick Henry,BAL,RB,KC,80.0,8.0
+Josh Allen,BUF,QB,NE,35.0,0.0
+"""
+    response = client.post(
+        "/api/upload/paste",
+        json={"data_type": "projections", "content": content, "season": 2026, "week": 2},
+    )
+    assert response.status_code == 200
+
+    browser = client.get("/api/evaluator/browse?position=RB&sort_market=rushing_yards&limit=30")
+    assert browser.status_code == 200
+    data = browser.json()
+    assert data["positions"] == ["QB", "RB"]
+    assert [player["player_name"] for player in data["players"]] == ["derrick henry", "saquon barkley"]
+    assert data["players"][0]["projections"]["rushing_yards"] == 80.0
+    assert {game["key"] for game in data["games"]} == {"BAL|KC", "BUF|NE", "DAL|PHI"}
+
+    game_browser = client.get("/api/evaluator/browse?game=BAL%7CKC&sort_market=rushing_yards")
+    assert game_browser.status_code == 200
+    assert [player["player_name"] for player in game_browser.json()["players"]] == ["derrick henry"]
+
+
 def test_active_snapshot_cannot_be_deleted_and_inactive_snapshot_can(client):
     first = client.post(
         "/api/upload/paste",

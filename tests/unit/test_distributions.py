@@ -24,6 +24,30 @@ from app.schemas.projections import PlayerProjection, Position, StatCategory
 class TestContinuousYardageDistributions:
     """Test suite for continuous yardage distributions (Log-Normal and Normal)."""
 
+    def test_default_cv_uses_market_before_player_position(self):
+        assert DistributionEngine.get_default_cv("RB", "rec_yds") == pytest.approx(0.55)
+        assert DistributionEngine.get_default_cv("WR", "rush_yds") == pytest.approx(0.42)
+        assert DistributionEngine.get_default_cv("RB", "pass_yds") == pytest.approx(0.28)
+
+    def test_default_cv_uses_position_when_market_has_no_cv(self):
+        assert DistributionEngine.get_default_cv("TE", "receptions") == pytest.approx(0.52)
+
+    def test_continuous_evaluation_uses_market_first_default(self):
+        rb_receiving = DistributionEngine.evaluate_continuous_prop(
+            projection_mean=60.0,
+            line=60.5,
+            position="RB",
+            stat_category="rec_yds",
+        )
+        explicit_receiving_cv = DistributionEngine.evaluate_continuous_prop(
+            projection_mean=60.0,
+            line=60.5,
+            position="RB",
+            stat_category="rec_yds",
+            cv_override=0.55,
+        )
+        assert rb_receiving.prob_over == pytest.approx(explicit_receiving_cv.prob_over)
+
     def test_lognormal_wr_rec_yards_standard(self):
         # M = 62.5, L = 65.5, WR (CV = 0.55)
         res = DistributionEngine.evaluate_continuous_prop(
