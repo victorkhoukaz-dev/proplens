@@ -2,8 +2,8 @@
 (() => {
   const $ = selector => document.querySelector(selector);
   const trackerModal = $('#tracker-modal'), saveModal = $('#save-bet-modal'), editModal = $('#edit-bet-modal'), cashoutModal = $('#cashout-modal');
-  const trackerList = $('#tracker-list'), trackerSummary = $('#tracker-summary'), trackerIncludePending = $('#tracker-include-pending'), trackerSearch = $('#tracker-search'), trackerStatusFilter = $('#tracker-status-filter'), trackerTypeFilter = $('#tracker-type-filter'), trackerSort = $('#tracker-sort'), trackerVisibleCount = $('#tracker-visible-count'), betType = $('#tracker-bet-type'), stake = $('#tracker-stake'), bonusHelp = $('#tracker-bonus-help'), checkResults = $('#btn-check-results'), resultPreview = $('#result-preview'), resultPreviewSummary = $('#result-preview-summary'), resultPreviewList = $('#result-preview-list');
-  let selectedBet = null, latestTrackerData = null;
+  const trackerList = $('#tracker-list'), trackerSummary = $('#tracker-summary'), trackerIncludePending = $('#tracker-include-pending'), trackerSearch = $('#tracker-search'), trackerStatusFilter = $('#tracker-status-filter'), trackerTypeFilter = $('#tracker-type-filter'), trackerSort = $('#tracker-sort'), trackerVisibleCount = $('#tracker-visible-count'), betType = $('#tracker-bet-type'), stake = $('#tracker-stake'), bonusHelp = $('#tracker-bonus-help'), checkResults = $('#btn-check-results'), resultPreview = $('#result-preview'), resultPreviewSummary = $('#result-preview-summary'), resultPreviewList = $('#result-preview-list'), toggleResultPreview = $('#btn-toggle-result-preview'), suggestionsOnly = $('#btn-suggestions-only');
+  let selectedBet = null, latestTrackerData = null, latestResultPreview = null, showingSuggestionsOnly = false;
   const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
   const money = value => `$${Number(value || 0).toFixed(2)}`;
   const percent = value => value === null || value === undefined ? '—' : `${Number(value).toFixed(1)}%`;
@@ -17,12 +17,20 @@
     return bets.filter(bet => {
       const matchesSearch = !search || `${bet.player_name} ${bet.market} ${bet.team || ''} ${bet.opponent || ''}`.toLowerCase().includes(search);
       const matchesStatus = status === 'all' || (status === 'settled' ? bet.status !== 'pending' : bet.status === status);
-      return matchesSearch && matchesStatus && (type === 'all' || bet.bet_type === type);
+      const matchesSuggestions = !showingSuggestionsOnly || (bet.status === 'pending' && resultSuggestionFor(bet)?.status === 'proposal');
+      return matchesSearch && matchesStatus && matchesSuggestions && (type === 'all' || bet.bet_type === type);
     }).sort((a, b) => {
       if (trackerSort.value === 'pending_first' && (a.status === 'pending') !== (b.status === 'pending')) return a.status === 'pending' ? -1 : 1;
       if (trackerSort.value === 'player') return a.player_name.localeCompare(b.player_name);
       return (trackerSort.value === 'oldest' ? 1 : -1) * String(a.created_at).localeCompare(String(b.created_at));
     });
+  }
+  function resultSuggestionFor(bet) { return latestResultPreview?.proposals.find(item => item.bet_id === bet.id); }
+  function inlineSuggestionMarkup(bet) {
+    const suggestion = resultSuggestionFor(bet);
+    if (bet.status !== 'pending' || suggestion?.status !== 'proposal') return '';
+    const outcome = suggestion.proposed_result[0].toUpperCase() + suggestion.proposed_result.slice(1);
+    return `<small class="inline-suggestion ${suggestion.proposed_result}">Suggested: ${outcome} · ${suggestion.actual_stat} ${escapeHtml(suggestion.stat_label)}</small>`;
   }
   function moreActions(bet) {
     const pendingActions = bet.status === 'pending' ? `<button data-settle="push" data-bet-id="${bet.id}">Push</button><button data-cancel="${bet.id}">Cancel before start</button>` : '';
@@ -32,7 +40,7 @@
     const matchup = bet.team ? `${escapeHtml(bet.team)}${bet.opponent ? ` vs ${escapeHtml(bet.opponent)}` : ''}${bet.result_identity?.status === 'ready' ? ` · W${escapeHtml(bet.result_identity.week)}` : ''} · ` : '';
     const profit = Number(bet.profit || 0), settled = bet.status !== 'pending';
     const actions = bet.status === 'pending' ? `<button class="settle-win" data-settle="won" data-bet-id="${bet.id}">Won</button><button data-settle="lost" data-bet-id="${bet.id}">Lost</button><button data-cashout="${bet.id}">Cash out</button>${moreActions(bet)}` : moreActions(bet);
-    return `<article class="tracked-bet ${bet.status === 'pending' ? 'is-pending' : 'is-settled'}"><div class="bet-identity"><strong>${escapeHtml(bet.player_name)}</strong><span class="bet-prop">${escapeHtml(bet.side_label)} ${bet.line} · ${marketLabel(bet.market)}</span><small>${matchup}${Number(bet.decimal_odds).toFixed(2)} · ${bet.bet_type === 'bonus' ? 'Bonus' : 'Cash'} · ${money(bet.stake)}</small></div><div class="bet-status ${bet.status}"><span>${statusLabel(bet)}</span>${settled ? `<strong class="${profit >= 0 ? 'positive' : 'negative'}">${profit >= 0 ? '+' : ''}${money(profit)}</strong>` : ''}</div><div class="settle-actions">${actions}</div></article>`;
+    return `<article class="tracked-bet ${bet.status === 'pending' ? 'is-pending' : 'is-settled'}"><div class="bet-identity"><strong>${escapeHtml(bet.player_name)}</strong><span class="bet-prop">${escapeHtml(bet.side_label)} ${bet.line} · ${marketLabel(bet.market)}</span><small>${matchup}${Number(bet.decimal_odds).toFixed(2)} · ${bet.bet_type === 'bonus' ? 'Bonus' : 'Cash'} · ${money(bet.stake)}</small></div><div class="bet-status ${bet.status}"><span>${statusLabel(bet)}</span>${inlineSuggestionMarkup(bet)}${settled ? `<strong class="${profit >= 0 ? 'positive' : 'negative'}">${profit >= 0 ? '+' : ''}${money(profit)}</strong>` : ''}</div><div class="settle-actions">${actions}</div></article>`;
   }
   function render(data) {
     latestTrackerData = data; window.proplensTrackedBets = data.bets;
@@ -50,18 +58,29 @@
     return `<div class="result-preview-row"><div><strong>${escapeHtml(item.player_name)} · ${escapeHtml(marketLabel(item.market))} ${item.line}</strong><small>${actual}</small></div><span class="result-preview-outcome ${outcomeClass}">${outcome}</span></div>`;
   }
   function renderResultPreview(data) {
+    latestResultPreview = data;
     resultPreview.hidden = false;
-    const proposed = data.proposals.filter(item => item.status === 'proposal').length;
+    resultPreview.classList.remove('is-collapsed');
+    toggleResultPreview.textContent = 'Collapse';
+    toggleResultPreview.setAttribute('aria-expanded', 'true');
+    const proposedItems = data.proposals.filter(item => item.status === 'proposal');
+    const proposed = proposedItems.length;
     const sourceNote = data.sources.length ? ` · nflverse ${data.sources.map(source => `${source.season} ${source.used_cache ? 'cache' : 'refresh'}`).join(', ')}` : '';
-    resultPreviewSummary.textContent = `${proposed} suggestion${proposed === 1 ? '' : 's'} from ${data.checked_pending} pending bet${data.checked_pending === 1 ? '' : 's'}${sourceNote}`;
+    const outcomes = ['won', 'lost', 'push'].map(status => { const count = proposedItems.filter(item => item.proposed_result === status).length; return count ? `${count} ${status[0].toUpperCase() + status.slice(1)}` : ''; }).filter(Boolean).join(' · ');
+    resultPreviewSummary.textContent = `${proposed} suggestion${proposed === 1 ? '' : 's'}${outcomes ? ` · ${outcomes}` : ''}${sourceNote}`;
     resultPreviewList.innerHTML = data.proposals.length ? data.proposals.map(previewMarkup).join('') : '<p class="field-help">There are no pending bets to check.</p>';
+    showingSuggestionsOnly = false;
+    suggestionsOnly.hidden = !proposed;
+    suggestionsOnly.classList.remove('active');
+    suggestionsOnly.textContent = `Suggestions only (${proposed})`;
   }
   async function loadTracker() { render(await api(`/api/tracker/bets?include_pending=${trackerIncludePending.checked}`)); }
   const findBet = id => (window.proplensTrackedBets || []).find(bet => bet.id === id);
   const refreshVisibleTracker = () => { if (latestTrackerData) render(latestTrackerData); };
   $('#btn-open-tracker').addEventListener('click', async () => { trackerModal.hidden = false; try { await loadTracker(); } catch (error) { toast(error.message, true); } });
-  checkResults.addEventListener('click', async () => { checkResults.disabled = true; checkResults.textContent = 'Checking…'; try { const data = await api('/api/tracker/results/preview', { method: 'POST' }); renderResultPreview(data); toast(`Checked ${data.checked_pending} pending bet${data.checked_pending === 1 ? '' : 's'}. No results were changed.`); } catch (error) { toast(error.message, true); } finally { checkResults.disabled = false; checkResults.textContent = 'Check results'; } });
-  $('#btn-close-result-preview').addEventListener('click', () => { resultPreview.hidden = true; });
+  checkResults.addEventListener('click', async () => { checkResults.disabled = true; checkResults.textContent = 'Checking…'; try { const data = await api('/api/tracker/results/preview', { method: 'POST' }); renderResultPreview(data); refreshVisibleTracker(); toast(`Checked ${data.checked_pending} pending bet${data.checked_pending === 1 ? '' : 's'}. No results were changed.`); } catch (error) { toast(error.message, true); } finally { checkResults.disabled = false; checkResults.textContent = 'Check results'; } });
+  toggleResultPreview.addEventListener('click', () => { const collapsed = resultPreview.classList.toggle('is-collapsed'); toggleResultPreview.textContent = collapsed ? 'Expand' : 'Collapse'; toggleResultPreview.setAttribute('aria-expanded', String(!collapsed)); });
+  suggestionsOnly.addEventListener('click', () => { showingSuggestionsOnly = !showingSuggestionsOnly; suggestionsOnly.classList.toggle('active', showingSuggestionsOnly); suggestionsOnly.textContent = showingSuggestionsOnly ? 'Show all bets' : `Suggestions only (${latestResultPreview?.proposals.filter(item => item.status === 'proposal').length || 0})`; refreshVisibleTracker(); });
   trackerIncludePending.addEventListener('change', () => loadTracker().catch(error => toast(error.message, true)));
   [trackerSearch, trackerStatusFilter, trackerTypeFilter, trackerSort].forEach(control => control.addEventListener('input', refreshVisibleTracker));
   document.addEventListener('click', event => { const button = event.target.closest('#btn-save-evaluation'); if (!button) return; const evaluation = window.proplensLatestEvaluation; if (!evaluation) return toast('Evaluate this prop before saving it.', true); $('#save-bet-summary').textContent = `${evaluation.prop.player_name} ${evaluation.prop.side_label} ${evaluation.prop.line} at ${Number(evaluation.prop.bet365_decimal).toFixed(2)}.`; stake.value = evaluation.value.entered_stake ?? ''; betType.value = 'cash'; bonusHelp.hidden = true; saveModal.hidden = false; });
