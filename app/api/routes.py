@@ -30,6 +30,7 @@ from app.db.projection_snapshot_store import (
 )
 from app.db.raw_odds_snapshot_store import raw_odds_snapshot_store
 from app.db.settings_store import settings_store
+from app.services.result_preview import result_preview_service
 from app.schemas.ev import MatchedEVOpportunity, PropBreakdown
 from app.schemas.projections import PlayerProjection, Position, StatCategory
 from app.schemas.odds import (
@@ -622,6 +623,16 @@ def evaluate_manual_prop(payload: PropEvaluationRequest) -> dict[str, Any]:
 def list_tracked_bets(include_pending: bool = True) -> dict[str, Any]:
     """Return locally stored straight bets and their cash-aware summary."""
     return {"bets": bet_tracker_store.list(), "summary": bet_tracker_store.summary(include_pending=include_pending)}
+
+
+@router.post("/tracker/results/preview")
+def preview_tracked_bet_results() -> dict[str, Any]:
+    """Check final stats and return suggestions without changing any tracked bet."""
+    try:
+        return result_preview_service.preview(bet_tracker_store.list(), refresh=True)
+    except Exception as exc:  # Keep provider issues from exposing an internal traceback to the UI.
+        logger.warning("Result preview could not complete: %s", exc)
+        raise HTTPException(status_code=502, detail="Could not check nflverse results right now. Your tracked bets were not changed.") from exc
 
 
 @router.post("/tracker/bets")

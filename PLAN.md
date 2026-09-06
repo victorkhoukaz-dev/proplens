@@ -75,7 +75,7 @@ Status: implemented and being tested.
 
 ### Phase 2C — Automatic result checking
 
-Status: provider feasibility testing completed; tracker integration has not started.
+Status: provider feasibility and identity capture completed; preview-only result checking is now ready for live user testing.
 
 #### Phase 2C.0 — Provider proof
 
@@ -102,11 +102,11 @@ Status: provider feasibility testing completed; tracker integration has not star
 
 #### Phase 2C.2 — Settlement preview
 
-- Add a **Check results** action.
-- Fetch and cache final player statistics.
-- Show actual statistic and proposed result for each pending bet.
-- Distinguish ready, game not final, unmatched player, DNP/void review, and unsupported market.
-- Require user approval before applying suggestions during the trial period.
+- **Implemented:** a **Check results** action downloads the relevant nflverse season once per click, caches it locally, and checks all pending bets with saved result context.
+- **Implemented:** the tracker displays the actual stat and a proposed win/loss/push for supported passing, rushing, receiving-yard, and reception props.
+- **Implemented:** it distinguishes missing legacy context, game not final/published, unmatched player review, source errors, and unsupported markets.
+- **Safety rule:** it is preview only; it does not change any tracked-bet result. User approval through the existing manual tracker controls remains required during the trial period.
+- **Deferred:** touchdown markets deliberately remain manual review until Phase 2C.4 sportsbook-grading work is tested.
 
 #### Phase 2C.3 — Safe settlement rules
 
