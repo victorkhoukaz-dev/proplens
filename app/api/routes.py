@@ -158,6 +158,7 @@ class TrackedBetCreateRequest(BaseModel):
     model_fair_decimal: float
     expected_value_pct: float
     source_context: dict[str, Any] | None = None
+    result_identity: dict[str, Any] | None = None
 
     @field_validator("stake")
     @classmethod
@@ -238,6 +239,87 @@ def _evaluator_projection(player_name: str, stat_category: StatCategory) -> Play
         if projection.stat_category == stat_category and _projection_key(projection) == requested_name:
             return projection
     return None
+
+
+def _active_projection_context() -> dict[str, Any] | None:
+    library = projection_snapshot_store.list_summaries()
+    return next((snapshot for snapshot in library["snapshots"] if snapshot["active"]), None)
+
+
+def _result_identity_for_projection(projection: PlayerProjection) -> dict[str, Any]:
+    """Capture only the stable match context already present in the evaluated projection.
+
+    A projection import does not tell us the home team, kickoff, or provider-specific
+    game/player IDs. Those will be resolved later from a result source rather than guessed.
+    """
+    snapshot = _active_projection_context()
+    team = TeamNormalizer.canonical_team(projection.team)
+    opponent = TeamNormalizer.canonical_team(projection.opponent) if projection.opponent else ""
+    season = projection.season
+    week = projection.week
+    ready = bool(
+        2020 <= season <= 2100
+        and isinstance(week, int)
+        and 1 <= week <= 25
+        and team
+        and opponent
+    )
+    return {
+        "version": 1,
+        "status": "ready" if ready else "needs_context",
+        "season": season,
+        "week": week,
+        "player_name": projection.canonical_name or projection.player_name,
+        "player_key": _projection_key(projection),
+        "team": team,
+        "opponent": opponent or None,
+        "matchup_key": "|".join(sorted((team, opponent))) if team and opponent else None,
+        "position": projection.position,
+        "projection_source": projection.source,
+        "projection_snapshot_id": snapshot.get("id") if snapshot else None,
+        "projection_snapshot_label": snapshot.get("label") if snapshot else None,
+        "nflverse_game_id": None,
+        "espn_event_id": None,
+        "scheduled_kickoff": None,
+    }
+
+
+def _result_identity_for_tracked_bet(
+    payload: TrackedBetCreateRequest,
+    source_context: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Sanitize a saved evaluation identity without trusting browser-supplied teams/names."""
+    hint = payload.result_identity if isinstance(payload.result_identity, dict) else {}
+    context = source_context if isinstance(source_context, dict) else {}
+
+    def valid_int(value: Any, minimum: int, maximum: int) -> int | None:
+        return value if isinstance(value, int) and minimum <= value <= maximum else None
+
+    season = valid_int(hint.get("season"), 2020, 2100) or valid_int(context.get("season"), 2020, 2100)
+    week = valid_int(hint.get("week"), 1, 25) or valid_int(context.get("week"), 1, 25)
+    team = TeamNormalizer.canonical_team(payload.team)
+    opponent = TeamNormalizer.canonical_team(payload.opponent) if payload.opponent else ""
+    player_key = PlayerNameNormalizer.clean_name(payload.player_name)
+    ready = bool(season and week and team and opponent and player_key)
+
+    return {
+        "version": 1,
+        "status": "ready" if ready else "needs_context",
+        "season": season,
+        "week": week,
+        "player_name": payload.player_name,
+        "player_key": player_key or None,
+        "team": team or None,
+        "opponent": opponent or None,
+        "matchup_key": "|".join(sorted((team, opponent))) if team and opponent else None,
+        "position": hint.get("position") if isinstance(hint.get("position"), str) else None,
+        "projection_source": hint.get("projection_source") if isinstance(hint.get("projection_source"), str) else None,
+        "projection_snapshot_id": hint.get("projection_snapshot_id") if isinstance(hint.get("projection_snapshot_id"), str) else context.get("id"),
+        "projection_snapshot_label": hint.get("projection_snapshot_label") if isinstance(hint.get("projection_snapshot_label"), str) else context.get("label"),
+        "nflverse_game_id": None,
+        "espn_event_id": None,
+        "scheduled_kickoff": None,
+    }
 
 
 def _activate_projection_snapshot(snapshot_id: str) -> dict[str, Any]:
@@ -511,6 +593,7 @@ def evaluate_manual_prop(payload: PropEvaluationRequest) -> dict[str, Any]:
             "source": projection.source,
             "updated_at": projection.updated_at,
         },
+        "result_identity": _result_identity_for_projection(projection),
         "model": {
             "win_probability": round(model_probability, 4),
             "push_probability": round(distribution.prob_push, 4),
@@ -546,9 +629,14 @@ def create_tracked_bet(payload: TrackedBetCreateRequest) -> dict[str, Any]:
     """Save an already-evaluated straight prop; this never places a bet."""
     source_context = payload.source_context
     if not source_context:
-        library = projection_snapshot_store.list_summaries()
-        source_context = next((snapshot for snapshot in library["snapshots"] if snapshot["active"]), None)
-    bet = bet_tracker_store.create({**payload.model_dump(), "source_context": source_context})
+        source_context = _active_projection_context()
+    bet = bet_tracker_store.create(
+        {
+            **payload.model_dump(exclude={"result_identity"}),
+            "source_context": source_context,
+            "result_identity": _result_identity_for_tracked_bet(payload, source_context),
+        }
+    )
     return {"success": True, "bet": bet, "summary": bet_tracker_store.summary()}
 
 

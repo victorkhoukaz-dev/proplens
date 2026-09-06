@@ -82,6 +82,73 @@ Josh Allen,BUF,QB,NE,35.0,0.0
     assert [player["player_name"] for player in game_browser.json()["players"]] == ["derrick henry"]
 
 
+def test_saved_evaluation_captures_result_match_identity(client):
+    imported = client.post(
+        "/api/upload/paste",
+        json={
+            "data_type": "projections",
+            "content": projection_text(70.5),
+            "season": 2025,
+            "week": 1,
+            "label": "Week 1 result-check test",
+        },
+    )
+    assert imported.status_code == 200
+
+    evaluation = client.post(
+        "/api/evaluator/evaluate",
+        json={
+            "player_name": "Saquon Barkley",
+            "stat_category": "rushing_yards",
+            "side": "over",
+            "line": 70.0,
+            "odds": 1.9,
+        },
+    ).json()
+    identity = evaluation["result_identity"]
+    assert identity["status"] == "ready"
+    assert identity["season"] == 2025
+    assert identity["week"] == 1
+    assert identity["player_key"] == "saquon barkley"
+    assert identity["matchup_key"] == "DAL|PHI"
+    assert identity["nflverse_game_id"] is None
+    assert identity["espn_event_id"] is None
+
+    prop, projection, model, value = (
+        evaluation["prop"],
+        evaluation["projection"],
+        evaluation["model"],
+        evaluation["value"],
+    )
+    saved = client.post(
+        "/api/tracker/bets",
+        json={
+            "player_name": prop["player_name"],
+            "team": prop["team"],
+            "opponent": prop["opponent"],
+            "market": prop["market"],
+            "side_label": prop["side_label"],
+            "line": prop["line"],
+            "decimal_odds": prop["bet365_decimal"],
+            "stake": 5,
+            "bet_type": "cash",
+            "projection_mean": projection["mean"],
+            "model_win_probability": model["win_probability"],
+            "model_fair_decimal": model["fair_decimal"],
+            "expected_value_pct": value["expected_value_pct"],
+            "result_identity": identity,
+        },
+    )
+    assert saved.status_code == 200
+    stored_identity = saved.json()["bet"]["result_identity"]
+    assert stored_identity["status"] == "ready"
+    assert stored_identity["season"] == 2025
+    assert stored_identity["week"] == 1
+    assert stored_identity["team"] == "PHI"
+    assert stored_identity["opponent"] == "DAL"
+    assert stored_identity["projection_snapshot_label"] == "Week 1 result-check test"
+
+
 def test_active_snapshot_cannot_be_deleted_and_inactive_snapshot_can(client):
     first = client.post(
         "/api/upload/paste",

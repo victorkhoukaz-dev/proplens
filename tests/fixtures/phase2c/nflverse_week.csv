@@ -1,0 +1,4 @@
+player_id,player_name,player_display_name,position,season,week,game_id,team,opponent_team,passing_yards,passing_tds,passing_interceptions,rushing_yards,rushing_tds,receptions,receiving_yards,receiving_tds
+00-0000001,S.Barkley,Saquon Barkley,RB,2025,1,2025_01_DAL_PHI,PHI,DAL,0,0,0,60,1,4,24,0
+00-0000002,J.Hurts,Jalen Hurts,QB,2025,1,2025_01_DAL_PHI,PHI,DAL,152,0,0,62,2,0,0,0
+00-0000003,C.Lamb,CeeDee Lamb,WR,2025,1,2025_01_DAL_PHI,DAL,PHI,0,0,0,0,0,7,110,0

@@ -1,0 +1,25 @@
+{
+  "get": "games/statistics/players",
+  "parameters": {"id": "123"},
+  "errors": [],
+  "results": 1,
+  "paging": {"current": 1, "total": 1},
+  "response": [
+    {
+      "game": {"id": 123},
+      "team": {"id": 1, "name": "Philadelphia Eagles"},
+      "players": [
+        {
+          "player": {"id": 10, "name": "Example Player"},
+          "statistics": {
+            "passing_yards": 0,
+            "rushing_yards": 60,
+            "receiving_yards": 24,
+            "receptions": 4,
+            "touchdowns": 1
+          }
+        }
+      ]
+    }
+  ]
+}
