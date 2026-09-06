@@ -75,7 +75,7 @@ Status: implemented and being tested.
 
 ### Phase 2C — Automatic result checking
 
-Status: provider feasibility and identity capture completed; preview-only result checking is now ready for live user testing.
+Status: provider feasibility, reliable identities, preview-only checks, and explicit source-backed confirmations have passed historical 2025 UI testing. Touchdown grading remains the next separate safety step.
 
 #### Phase 2C.0 — Provider proof
 
@@ -102,33 +102,46 @@ Status: provider feasibility and identity capture completed; preview-only result
 
 #### Phase 2C.2 — Settlement preview
 
-- **Implemented:** a **Check results** action downloads the relevant nflverse season once per click, caches it locally, and checks all pending bets with saved result context.
+- **Implemented and tested:** a **Check results** action downloads the relevant nflverse season once per click, caches it locally, and checks all pending bets with saved result context.
 - **Implemented:** the tracker displays the actual stat and a proposed win/loss/push for supported passing, rushing, receiving-yard, and reception props.
-- **Implemented:** it distinguishes missing legacy context, game not final/published, unmatched player review, source errors, and unsupported markets.
+- **Implemented and tested:** it distinguishes missing legacy context, game not final/published, unmatched player review, source errors, and unsupported markets.
 - **Safety rule:** it is preview only; it does not change any tracked-bet result. User approval through the existing manual tracker controls remains required during the trial period.
+- **UX implemented and tested:** suggestions can collapse to a one-line summary, filter to actionable rows only, and display the proposed result plus actual statistic inline on the relevant Pending rows.
 - **Deferred:** touchdown markets deliberately remain manual review until Phase 2C.4 sportsbook-grading work is tested.
 
 #### Phase 2C.3 — Safe settlement rules
 
-- Settle ordinary over/under lines, including exact whole-number pushes.
-- Never infer zero merely because a player row is missing.
-- Ignore cash-outs, cancellations, and already settled bets.
-- Record result source, source timestamp, observed statistic, and settlement reason.
-- Make repeated checks idempotent and preserve an audit trail.
+- **Implemented and tested:** an explicit **Confirm Won/Lost/Push** action rechecks the individual Pending bet against cached nflverse final data before settling it.
+- **Implemented and tested:** ordinary passing/rushing/receiving yards and receptions support wins, losses, and exact whole-number pushes; a missing player is never treated as zero.
+- **Implemented and tested:** confirmation refuses cash-outs, cancellations, already settled bets, waiting rows, unmatched players, unsupported markets, and changed proposals.
+- **Implemented and tested:** each confirmed result stores nflverse as the source, source timestamp, observed statistic, season/week, reason, and a settlement-history entry. The settled row shows the concise evidence line in the tracker.
+- **Safety rule retained:** no result is applied simply by running Check results; the user must approve each exact proposed outcome.
 
 #### Phase 2C.4 — Touchdowns and sportsbook exceptions
 
-- Test anytime-TD logic separately.
-- Exclude passing touchdowns from scorer bets.
-- Review returns, fumble recoveries, participation, voids, postponed games, and Bet365-specific grading rules.
-- Keep ambiguous outcomes as review items.
+- **Implemented and tested:** Anytime TD can suggest and explicitly confirm **Won** only when nflverse records at least one rushing or receiving touchdown for the exact matched player/game.
+- **Implemented:** passing touchdowns are excluded from scorer logic.
+- **Safety rule:** no rushing/receiving TD never becomes an automatic loss; return/recovery touchdown possibilities, participation/no-action, voids, postponements, and Bet365-specific grading remain **Needs review**.
+- **Current evidence:** Bet365 Canada states that American-football wagers are settled from official-provider/competition statistics, with independent evidence or its own statistics used where necessary. PropLens therefore treats nflverse as helpful confirmation evidence, not the final authority in a scoring exception.
+- **Still deferred:** play-by-play-backed treatment of return/recovery TDs and explicit participation/no-action detection before any broader automatic TD result support.
 
-#### Phase 2C.5 — Optional high-confidence automation
+### Future revisit — Optional result automation and faster stats
 
-- Consider automatic settlement only after preview results are proven accurate across real weeks.
-- Automatically apply only final-game, exact-player, exact-game, supported-market matches.
-- Recheck recent games for stat corrections and request approval before changing a previous result.
-- While PropLens remains local, check on demand or when the tracker opens; true unattended schedules require an always-running deployment.
+This is intentionally **not the next phase**. The current Check results → explicit Confirm workflow is the default until it has been proven through real NFL weeks.
+
+#### Future option 2C.5 — High-confidence automatic settlement
+
+- Reconsider only after at least 3–4 live NFL weeks, approximately 20–30 confirmed standard-market bets, and no unexplained matching or Bet365-settlement discrepancy.
+- Automatically apply only final-game, exact-player, exact-game, supported-market matches; keep touchdown exceptions and ambiguous cases for review.
+- Recheck recently settled games for stat corrections and request approval before changing an earlier recorded result.
+- While PropLens remains local, any check still requires the app to be open; true unattended checks would require an always-running deployment.
+- Preserve the current explicit confirmation workflow as a permanent fallback and user preference, even if automation is later introduced.
+
+#### Future option — Faster/supplementary sports-stat API
+
+- nflverse remains the free primary source for next-morning final-stat checks.
+- Revisit ESPN or a paid/supported provider only if same-day updates, stronger game-status data, or play-by-play touchdown exception coverage becomes valuable enough to justify the added complexity or cost.
+- Re-test any provider's current access, pricing, terms, and data coverage at the time of the decision; do not assume a past free tier remains available.
 
 ## Phase 3 — Parlays
 

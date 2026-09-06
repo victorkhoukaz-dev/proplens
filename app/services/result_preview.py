@@ -23,6 +23,7 @@ SUPPORTED_MARKETS = {
     "receiving_yards": ("receiving_yards", "receiving yards"),
     "receptions": ("receptions", "receptions"),
 }
+TOUCHDOWN_STAT_FIELDS = ("rushing_tds", "receiving_tds")
 
 
 class ResultPreviewError(RuntimeError):
@@ -88,7 +89,10 @@ class ResultPreviewService:
                     "player_key": PlayerNameNormalizer.clean_name(raw.get("player_display_name") or raw.get("player_name") or ""),
                     "team": TeamNormalizer.canonical_team(raw.get("team") or ""),
                     "opponent": TeamNormalizer.canonical_team(raw.get("opponent_team") or ""),
-                    "stats": {key: _number(raw.get(key)) for key in SUPPORTED_MARKETS},
+                    "stats": {
+                        **{key: _number(raw.get(key)) for key in SUPPORTED_MARKETS},
+                        **{key: _number(raw.get(key)) for key in TOUCHDOWN_STAT_FIELDS},
+                    },
                 }
             )
         return rows
@@ -99,7 +103,7 @@ class ResultPreviewService:
         base = {"bet_id": bet["id"], "player_name": bet["player_name"], "market": bet["market"], "line": bet["line"]}
         if not identity:
             return {**base, "status": "missing_context", "message": "Legacy bet: no reliable week, team, and opponent context was saved."}
-        if bet["market"] not in SUPPORTED_MARKETS:
+        if bet["market"] not in SUPPORTED_MARKETS and bet["market"] != "anytime_td":
             return {**base, "status": "unsupported_market", "message": "This market stays manual until its grading rules are tested."}
         week_rows = [row for row in rows if row["season"] == identity["season"] and row["week"] == identity["week"]]
         game_rows = [row for row in week_rows if {row["team"], row["opponent"]} == {identity["team"], identity["opponent"]}]
@@ -108,6 +112,21 @@ class ResultPreviewService:
         matches = [row for row in game_rows if row["team"] == identity["team"] and row["opponent"] == identity["opponent"] and row["player_key"] == identity["player_key"]]
         if len(matches) != 1:
             return {**base, "status": "player_review", "message": "Game stats exist, but this player was not matched safely. Review manually; missing does not mean zero."}
+        if bet["market"] == "anytime_td":
+            # nflverse's weekly player table proves a conventional offensive TD, but it does
+            # not by itself rule out every Bet365-relevant return/recovery scoring edge case.
+            # Therefore it can safely suggest a win, never an automatic loss.
+            offensive_tds = sum(float(matches[0]["stats"].get(field) or 0) for field in TOUCHDOWN_STAT_FIELDS)
+            if offensive_tds > 0:
+                return {
+                    **base,
+                    "status": "proposal",
+                    "proposed_result": "won",
+                    "actual_stat": offensive_tds,
+                    "stat_label": "offensive rushing/receiving TDs",
+                    "message": "Preview only — a rushing or receiving touchdown proves this Anytime TD selection won.",
+                }
+            return {**base, "status": "player_review", "message": "No rushing or receiving touchdown was found. Do not infer a loss: review Bet365 settlement for return or recovery touchdown exceptions."}
         stat_field, label = SUPPORTED_MARKETS[bet["market"]]
         actual = matches[0]["stats"].get(stat_field)
         if actual is None:
@@ -130,7 +149,7 @@ class ResultPreviewService:
             {
                 _identity_ready(bet)["season"]
                 for bet in pending
-                if _identity_ready(bet) and bet.get("market") in SUPPORTED_MARKETS
+                if _identity_ready(bet) and (bet.get("market") in SUPPORTED_MARKETS or bet.get("market") == "anytime_td")
             }
         )
         rows: list[dict[str, Any]] = []

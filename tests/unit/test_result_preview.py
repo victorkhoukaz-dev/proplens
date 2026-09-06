@@ -6,11 +6,14 @@ from app.services.result_preview import ResultPreviewError, result_preview_servi
 FIXTURE = Path(__file__).resolve().parent.parent / "fixtures" / "phase2c" / "nflverse_week.csv"
 
 
-def pending_bet(*, market="rushing_yards", side="Over", line=55.0, player_key="saquon barkley"):
+def pending_bet(
+    *, market="rushing_yards", side="Over", line=55.0, player_name="Saquon Barkley",
+    player_key="saquon barkley", team="PHI", opponent="DAL",
+):
     return {
         "id": "bet-1",
         "status": "pending",
-        "player_name": "Saquon Barkley",
+        "player_name": player_name,
         "market": market,
         "side_label": side,
         "line": line,
@@ -19,8 +22,8 @@ def pending_bet(*, market="rushing_yards", side="Over", line=55.0, player_key="s
             "season": 2025,
             "week": 1,
             "player_key": player_key,
-            "team": "PHI",
-            "opponent": "DAL",
+            "team": team,
+            "opponent": opponent,
         },
     }
 
@@ -58,13 +61,33 @@ def test_preview_never_assumes_missing_player_has_zero(monkeypatch):
     assert "missing does not mean zero" in report["proposals"][0]["message"]
 
 
-def test_preview_leaves_touchdowns_for_manual_review_without_downloading(monkeypatch):
-    monkeypatch.setattr(result_preview_service, "_season_content", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("Should not fetch")))
+def test_preview_anytime_td_suggests_won_only_when_an_offensive_td_is_present(monkeypatch):
+    content = FIXTURE.read_text(encoding="utf-8")
+    monkeypatch.setattr(result_preview_service, "_season_content", lambda season, refresh: (content, "2025-09-08T12:00:00+00:00", False))
 
     report = result_preview_service.preview([pending_bet(market="anytime_td", side="Yes", line=0.5)])
 
-    assert report["sources"] == []
-    assert report["proposals"][0]["status"] == "unsupported_market"
+    proposal = report["proposals"][0]
+    assert proposal["status"] == "proposal"
+    assert proposal["proposed_result"] == "won"
+    assert proposal["actual_stat"] == 1.0
+    assert proposal["stat_label"] == "offensive rushing/receiving TDs"
+
+
+def test_preview_anytime_td_never_infers_a_loss_from_no_offensive_td(monkeypatch):
+    content = FIXTURE.read_text(encoding="utf-8")
+    monkeypatch.setattr(result_preview_service, "_season_content", lambda season, refresh: (content, "2025-09-08T12:00:00+00:00", False))
+
+    report = result_preview_service.preview([
+        pending_bet(
+            market="anytime_td", side="Yes", line=0.5, player_name="CeeDee Lamb",
+            player_key="ceedee lamb", team="DAL", opponent="PHI",
+        )
+    ])
+
+    proposal = report["proposals"][0]
+    assert proposal["status"] == "player_review"
+    assert "Do not infer a loss" in proposal["message"]
 
 
 def test_preview_translates_missing_season_file_into_waiting_for_stats(monkeypatch):
