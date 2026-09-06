@@ -188,6 +188,10 @@ class TrackedBetSettleRequest(BaseModel):
         return value
 
 
+class ResultPreviewConfirmRequest(BaseModel):
+    expected_result: Literal["won", "lost", "push"]
+
+
 class TrackedBetUpdateRequest(BaseModel):
     stake: float | None = None
     bet_type: Literal["cash", "bonus"] | None = None
@@ -633,6 +637,46 @@ def preview_tracked_bet_results() -> dict[str, Any]:
     except Exception as exc:  # Keep provider issues from exposing an internal traceback to the UI.
         logger.warning("Result preview could not complete: %s", exc)
         raise HTTPException(status_code=502, detail="Could not check nflverse results right now. Your tracked bets were not changed.") from exc
+
+
+@router.post("/tracker/bets/{bet_id}/confirm-result-preview")
+def confirm_result_preview(bet_id: str, payload: ResultPreviewConfirmRequest) -> dict[str, Any]:
+    """Explicitly confirm one still-pending, exact matched result preview."""
+    bet = next((item for item in bet_tracker_store.list() if item["id"] == bet_id), None)
+    if bet is None:
+        raise HTTPException(status_code=404, detail="Tracked bet not found.")
+    if bet.get("status") != "pending":
+        raise HTTPException(status_code=409, detail="Only a pending bet can be confirmed from a result preview.")
+    try:
+        report = result_preview_service.preview([bet], refresh=False)
+    except Exception as exc:
+        logger.warning("Could not recheck result preview for %s: %s", bet_id, exc)
+        raise HTTPException(status_code=502, detail="Could not recheck this result. Your tracked bet was not changed.") from exc
+    proposal = next(
+        (item for item in report.get("proposals", []) if isinstance(item, dict) and item.get("bet_id") == bet_id),
+        None,
+    )
+    if not proposal or proposal.get("status") != "proposal":
+        raise HTTPException(status_code=409, detail="This result is no longer an exact final-stat match. Your tracked bet was not changed.")
+    if proposal["proposed_result"] != payload.expected_result:
+        raise HTTPException(status_code=409, detail="The proposed result changed. Check results again before confirming.")
+    source = report["sources"][0] if report.get("sources") else {}
+    evidence = {
+        "version": 1,
+        "source": source.get("source", "nflverse"),
+        "source_fetched_at": source.get("fetched_at"),
+        "season": bet.get("result_identity", {}).get("season"),
+        "week": bet.get("result_identity", {}).get("week"),
+        "actual_stat": proposal["actual_stat"],
+        "stat_label": proposal["stat_label"],
+        "proposed_result": proposal["proposed_result"],
+        "reason": "Exact final player, team, game, and supported-market match confirmed by the user.",
+    }
+    try:
+        confirmed = bet_tracker_store.settle(bet_id, payload.expected_result, evidence=evidence)
+    except TrackedBetNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Tracked bet not found.") from exc
+    return {"success": True, "bet": confirmed, "evidence": evidence}
 
 
 @router.post("/tracker/bets")

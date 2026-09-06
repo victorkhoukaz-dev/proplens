@@ -62,14 +62,41 @@ class BetTrackerStore:
             return round(settlement_amount if bet["bet_type"] == "bonus" else settlement_amount - stake, 2)
         return 0.0
 
-    def settle(self, bet_id: str, status: str, settlement_amount: float | None = None) -> dict[str, Any]:
+    def settle(
+        self,
+        bet_id: str,
+        status: str,
+        settlement_amount: float | None = None,
+        *,
+        evidence: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         with self._lock:
             bets = self._read()
             for bet in bets:
                 if bet["id"] != bet_id:
                     continue
                 profit = self._profit(bet, status, settlement_amount)
-                bet.update({"status": status, "profit": profit, "settlement_amount": settlement_amount, "settled_at": datetime.now(timezone.utc).isoformat()})
+                settled_at = datetime.now(timezone.utc).isoformat()
+                history = list(bet.get("settlement_history") or [])
+                history.append(
+                    {
+                        "at": settled_at,
+                        "status": status,
+                        "settlement_amount": settlement_amount,
+                        "source": "result_preview" if evidence else "manual",
+                        "evidence": evidence,
+                    }
+                )
+                bet.update(
+                    {
+                        "status": status,
+                        "profit": profit,
+                        "settlement_amount": settlement_amount,
+                        "settled_at": settled_at,
+                        "settlement_evidence": evidence,
+                        "settlement_history": history,
+                    }
+                )
                 self._write(bets)
                 return bet
         raise TrackedBetNotFoundError(bet_id)
