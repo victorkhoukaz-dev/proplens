@@ -145,7 +145,7 @@ This is intentionally **not the next phase**. The current Check results → expl
 
 ## Phase 3 — Parlays
 
-Status: planned after the straight-bet evaluator and tracker are dependable.
+Status: Phase 3A is implemented as a temporary manual calculator and is in user-experience testing. It does not yet save or settle parlays.
 
 ### Phase 3A — Manual parlay evaluator
 
@@ -153,7 +153,10 @@ Status: planned after the straight-bet evaluator and tracker are dependable.
 - Accept the actual Bet365 combined decimal odds.
 - Calculate the independent-leg baseline by multiplying leg probabilities.
 - Show independent fair odds, actual sportsbook odds, break-even probability, and estimated EV.
+- Show the actual win return separately from the long-run estimated net result on an optional stake.
 - Clearly label the result as an independence baseline when correlation is not modeled.
+- Detect same-game legs and explicitly state that neither a positive nor negative independence-baseline EV is a correlation-adjusted value verdict.
+- Show the price gap versus independent fair odds as a comparison, not as proof of value for a same-game parlay.
 
 ### Phase 3B — Belief and sensitivity analysis
 
@@ -208,13 +211,10 @@ Status: monitor and test opportunistically; do not make it the core workflow yet
 
 ## Current recommended order
 
-1. Implement Phase 2C.1 reliable identities using nflverse-compatible season, week, game, team, and player fields.
-2. Preserve the completed provider probes as isolated diagnostics and fixtures.
-3. Implement preview-only result checking in Phase 2C.2.
-4. Test it through real NFL weeks before enabling any automatic settlement.
-5. Begin Phase 3A manual parlay evaluation.
-6. Add parlay tracking by reusing the Phase 2C result engine.
-7. Treat correlation and player-specific modeling as later evidence-driven improvements.
+1. Finish Phase 3A usability testing with both cross-game and same-game slips. Confirm that its labels are clear enough to prevent treating an independent baseline as proven SGP value.
+2. Keep Phase 2C's explicit result-confirmation workflow in live use and revisit automatic settlement only after the documented live-week trial.
+3. Decide whether the next parlay step should be Phase 3B belief/sensitivity analysis or Phase 3C parlay tracking, based on the actual workflow that proves more useful.
+4. Treat correlation and player-specific modeling as later evidence-driven improvements.
 
 ## Product safety principles
 
