@@ -101,6 +101,41 @@ def test_manual_parlay_can_mix_guided_and_free_text_legs(client):
     assert free_text["description"] == "Eagles moneyline"
 
 
+def test_mixed_parlay_retains_evaluated_leg_but_has_no_combined_model_probability(client):
+    response = client.post(
+        "/api/tracker/parlays/manual",
+        json=payload(
+            legs=[
+                {
+                    "entry_mode": "evaluated",
+                    "description": "Saquon Barkley · Over · 64.5 · Rushing yards",
+                    "category": "player_prop",
+                    "player_name": "Saquon Barkley",
+                    "position": "RB",
+                    "team": "PHI",
+                    "opponent": "DAL",
+                    "market": "rushing_yards",
+                    "side_label": "Over",
+                    "line": 64.5,
+                    "decimal_odds": 1.9,
+                    "probability": 0.54,
+                    "result_identity": {"season": 2026, "week": 1, "position": "RB"},
+                },
+                {"entry_mode": "free_text", "description": "Eagles moneyline"},
+            ]
+        ),
+    )
+
+    assert response.status_code == 200
+    parlay = response.json()["parlay"]
+    assert parlay["entry_origin"] == "mixed"
+    assert parlay["independent_model_probability"] is None
+    assert parlay["legs"][0]["entry_mode"] == "evaluated"
+    assert parlay["legs"][0]["probability"] == 0.54
+    assert parlay["legs"][0]["result_identity"]["season"] == 2026
+    assert parlay["legs"][1]["entry_mode"] == "free_text"
+
+
 def test_manual_parlay_requires_two_legs_and_complete_week_context(client):
     one_leg = client.post("/api/tracker/parlays/manual", json=payload(legs=["Eagles moneyline"]))
     partial_week = client.post("/api/tracker/parlays/manual", json=payload(week=None))

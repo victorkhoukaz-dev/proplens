@@ -321,9 +321,9 @@ class TrackedParlayCreateRequest(BaseModel):
 
 
 class ManualTrackedParlayLegRequest(BaseModel):
-    """One manual parlay leg, entered as guided fields or unrestricted text."""
+    """One tracking-only or evaluated leg in a manually assembled parlay."""
 
-    entry_mode: Literal["structured", "free_text"] = "free_text"
+    entry_mode: Literal["structured", "free_text", "evaluated"] = "free_text"
     description: str
     category: Literal["player_prop", "game_bet", "custom"] | None = None
     player_name: str | None = None
@@ -333,6 +333,9 @@ class ManualTrackedParlayLegRequest(BaseModel):
     market: str | None = None
     side_label: str | None = None
     line: float | None = None
+    decimal_odds: float | None = None
+    probability: float | None = None
+    result_identity: dict[str, Any] | None = None
 
     @field_validator("description")
     @classmethod
@@ -693,7 +696,7 @@ def _manual_parlay_record(payload: ManualTrackedParlayRequest) -> dict[str, Any]
         raise HTTPException(status_code=400, detail="Winning total return cannot be less than the stake.")
     manual_legs = []
     for leg in payload.legs:
-        result_identity = {
+        result_identity = leg.result_identity if leg.entry_mode == "evaluated" and leg.result_identity else {
             "version": 1,
             "status": "manual_required",
             "season": payload.season,
@@ -712,14 +715,16 @@ def _manual_parlay_record(payload: ManualTrackedParlayRequest) -> dict[str, Any]
                 "market": leg.market or "manual",
                 "side_label": leg.side_label or "",
                 "line": leg.line,
-                "decimal_odds": None,
-                "probability": None,
+                "decimal_odds": leg.decimal_odds if leg.entry_mode == "evaluated" else None,
+                "probability": leg.probability if leg.entry_mode == "evaluated" else None,
                 "result_identity": result_identity,
             }
         )
+    has_evaluated_leg = any(leg.entry_mode == "evaluated" for leg in payload.legs)
+    has_manual_leg = any(leg.entry_mode != "evaluated" for leg in payload.legs)
     return {
-        "entry_origin": "manual",
-        "description": payload.description or f"{len(manual_legs)}-leg manual parlay",
+        "entry_origin": "mixed" if has_evaluated_leg and has_manual_leg else "manual",
+        "description": payload.description or f"{len(manual_legs)}-leg {'mixed' if has_evaluated_leg and has_manual_leg else 'manual'} parlay",
         "legs": manual_legs,
         "original_decimal_odds": payload.decimal_odds,
         "effective_decimal_odds": effective_odds,

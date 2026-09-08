@@ -9,6 +9,7 @@
   const list = document.querySelector('#projection-browser-list');
   const recentSection = document.querySelector('#recent-players');
   const recentButtons = document.querySelector('#recent-player-buttons');
+  const clearRecentButton = document.querySelector('#btn-clear-recent-players');
   const closeButton = modal.querySelector('[data-close="projection-browser-modal"]');
   const recentStorageKey = 'proplens_recent_evaluated_players_v1';
   const preferredMarket = { QB: 'passing_yards', RB: 'rushing_yards', WR: 'receiving_yards', TE: 'receiving_yards' };
@@ -143,6 +144,10 @@
   recentButtons.addEventListener('click', event => {
     const button = event.target.closest('[data-recent-player]');
     if (button) selectRecent(Number(button.dataset.recentPlayer));
+  });
+  clearRecentButton.addEventListener('click', () => {
+    try { localStorage.removeItem(recentStorageKey); } catch { return; }
+    renderRecent();
   });
   window.addEventListener('proplens:evaluation-complete', event => rememberEvaluation(event.detail));
   renderRecent();

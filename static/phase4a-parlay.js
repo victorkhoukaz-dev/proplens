@@ -42,7 +42,7 @@
           <div class="manual-parlay-grid manual-parlay-financials">
             <label>Description <span>optional</span><input id="manual-parlay-description" class="number-input" placeholder="e.g. Sunday games parlay"></label>
             <label>Combined decimal odds<input id="manual-parlay-odds" class="number-input" inputmode="decimal" placeholder="e.g. 5.80" required></label>
-            <label>Stake / bonus value<input id="manual-parlay-stake" class="number-input" inputmode="decimal" placeholder="e.g. 10" required></label>
+            <label>Stake / bonus value<input id="manual-parlay-stake" class="number-input" inputmode="decimal" value="5" placeholder="e.g. 10" required></label>
             <label>Bet type<select id="manual-parlay-type"><option value="cash">Cash bet</option><option value="bonus">Bonus bet — stake not returned</option></select></label>
             <label>Bet365 profit boost <span>optional %</span><input id="manual-parlay-boost" class="number-input" inputmode="decimal" min="0" placeholder="e.g. 25"></label>
             <label>Actual boosted return <span>optional $</span><input id="manual-parlay-return" class="number-input" inputmode="decimal" min="0" placeholder="Overrides boost %"></label>
