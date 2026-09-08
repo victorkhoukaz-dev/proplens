@@ -9,6 +9,8 @@
   const settlementField = $('#manual-settlement-field');
   const playerFields = [...document.querySelectorAll('.manual-player-field')];
   const selectionFields = [...document.querySelectorAll('.manual-selection-field')];
+  const weekHelp = $('#manual-week-help');
+  const weekOneStarts = { 2026: [2026, 8, 9] };
   let editingId = null;
   let playerMatches = [];
   let searchTimer = null;
@@ -64,6 +66,36 @@
     if (defaultMarket && [...market.options].some(option => option.value === defaultMarket)) market.value = defaultMarket;
   }
 
+  function suggestedWeekForSeason(season) {
+    const startParts = weekOneStarts[season];
+    if (!startParts) return null;
+    const start = new Date(...startParts);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const daysFromWeekOneStart = Math.floor((today - start) / 86400000);
+    const week = Math.floor((daysFromWeekOneStart + 1) / 7) + 1;
+    if (week < 1 || week > 18) return null;
+    return week;
+  }
+
+  function applyWeekSuggestion() {
+    const season = Number(value('#manual-season'));
+    const storedWeek = Number(sessionStorage.getItem(`proplens-manual-week-${season}`));
+    const suggestedWeek = Number.isInteger(storedWeek) && storedWeek >= 1 && storedWeek <= 25 ? storedWeek : suggestedWeekForSeason(season);
+    $('#manual-week').value = suggestedWeek || '';
+    if (storedWeek) weekHelp.textContent = `Using Week ${storedWeek}, your last choice this session.`;
+    else if (suggestedWeek) weekHelp.textContent = `Suggested Week ${suggestedWeek} from today's NFL calendar. You can change it.`;
+    else weekHelp.textContent = 'Choose the week manually for this season.';
+  }
+
+  function rememberManualWeek() {
+    const season = Number(value('#manual-season'));
+    const week = Number(value('#manual-week'));
+    if (!Number.isInteger(season) || !Number.isInteger(week) || week < 1 || week > 25) return;
+    sessionStorage.setItem(`proplens-manual-week-${season}`, String(week));
+    weekHelp.textContent = `Week ${week} will be used for new manual bets this session.`;
+  }
+
   function updateSettlementVisibility() {
     settlementField.hidden = status.value !== 'cashed_out';
   }
@@ -84,6 +116,7 @@
     editingId = null;
     renderMarkets();
     updateSettlementVisibility();
+    applyWeekSuggestion();
     $('#manual-bet-title').textContent = 'Track a manual bet';
     $('#btn-save-manual-bet').textContent = 'Save manual bet';
   }
@@ -151,6 +184,7 @@
     $('#manual-opponent').value = bet.opponent || '';
     $('#manual-season').value = bet.result_identity?.season ?? '';
     $('#manual-week').value = bet.result_identity?.week ?? '';
+    weekHelp.textContent = bet.result_identity?.week ? `Saved Week ${bet.result_identity.week}. Editing does not change it automatically.` : 'No NFL week was saved for this record.';
     $('#manual-odds').value = bet.decimal_odds;
     $('#manual-stake').value = bet.stake;
     $('#manual-type').value = bet.bet_type;
@@ -165,6 +199,8 @@
   $('#btn-manual-bet').addEventListener('click', () => { resetForm(); modal.hidden = false; searchPlayers(); });
   category.addEventListener('change', () => renderMarkets());
   $('#manual-position').addEventListener('change', applyDefaultMarketForPosition);
+  $('#manual-season').addEventListener('change', applyWeekSuggestion);
+  $('#manual-week').addEventListener('change', rememberManualWeek);
   status.addEventListener('change', updateSettlementVisibility);
   $('#manual-player').addEventListener('input', () => {
     applyPlayerSuggestion();

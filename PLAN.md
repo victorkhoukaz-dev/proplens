@@ -185,6 +185,7 @@ Status: Phase 3A (independence baseline and Bet365 boosts), Phase 3B (personal s
 
 - Save a parlay and all component legs, plus original odds, effective boosted odds, boost/return treatment, stake type, and calculated winning return.
 - **Phase 3C.0 — implemented, awaiting user testing:** manually track pending, won, lost, push-adjusted, void-adjusted, cashed-out, and cancelled parlays; correct saved financial details or settlement later; delete a test/error record deliberately. Keep straight and parlay ledgers separate, but offer a concise optional combined overall-performance roll-up for total profit, ROI on cash risk, cash wagered, and bonus value used.
+- **Manual-parlay extension — implemented, awaiting user testing:** add a separate **Track manual parlay** path for bets whose legs were not evaluated, are unsupported, or were placed before projections were available. Record 2–10 free-text legs, combined Bet365 odds, stake, cash/bonus type, optional profit boost or exact return, and optional shared season/week. Label it **Manual** and save no probability, fair odds, or EV. This keeps it eligible for normal financial tracking and later correction without misrepresenting it as model-backed or correlation-tested.
 - **Phase 3C.1 — future:** reuse Phase 2C game/player identifiers and result checks for every eligible leg, then present a cautious whole-parlay settlement suggestion only when all required legs have final, unambiguous results.
 - Apply sportsbook repricing rules cautiously when a leg pushes or is voided.
 
@@ -207,6 +208,7 @@ Status: next practical product work. Complete this before returning to automatic
 - Keep Phase 4A manual entries on manual settlement for this first safe version. Precisely identified supported player props can be connected to result checks in a later extension after their identity and grading behavior are tested.
 - Reuse existing cash/bonus accounting, ROI, result correction, cash-out, cancellation, and deletion behavior.
 - Capture description/category, player and position where applicable, team, opponent, market, side, optional line, decimal odds, stake, cash/bonus type, and optional season plus NFL week.
+- Default new entries to the current configured season and offer an editable, date-based NFL-week suggestion; remember the last manually chosen week only for the current browser session.
 - Permit full correction of a manual entry through its own edit form while preserving the rule that it contains no model evaluation.
 
 ### Phase 4B — Unified overall activity view

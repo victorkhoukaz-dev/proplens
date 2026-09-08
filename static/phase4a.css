@@ -8,6 +8,7 @@
 .manual-form-grid label{min-width:0;margin:0;font-size:11px}
 .manual-form-grid label>span{color:var(--muted);font-weight:400}
 .manual-form-grid input,.manual-form-grid select{margin-top:5px;padding:9px 10px;border-radius:8px;font-size:12px}
+.manual-week-help{display:block;min-height:14px;margin-top:4px;color:var(--blue);font-size:10px;font-weight:400;line-height:1.25}
 .manual-form-grid [hidden]{display:none}
 .manual-settlement-note{margin:11px 0 0!important;padding:8px 10px;border-left:2px solid var(--blue);background:rgba(139,197,255,.055);font-size:11px!important}
 .manual-bet-card .secondary-button{margin-top:11px;padding:11px}

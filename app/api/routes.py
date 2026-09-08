@@ -320,6 +320,80 @@ class TrackedParlayCreateRequest(BaseModel):
         return value
 
 
+class ManualTrackedParlayRequest(BaseModel):
+    """A tracking-only parlay with free-text legs and no model calculation."""
+
+    description: str | None = None
+    legs: list[str]
+    decimal_odds: float
+    stake: float
+    bet_type: Literal["cash", "bonus"]
+    profit_boost_pct: float = 0
+    actual_total_return: float | None = None
+    season: int | None = None
+    week: int | None = None
+    status: Literal["pending", "won", "lost", "cashed_out", "cancelled", "push_adjusted", "void_adjusted"] = "pending"
+    settlement_amount: float | None = None
+
+    @field_validator("description")
+    @classmethod
+    def clean_manual_parlay_description(cls, value: str | None) -> str | None:
+        cleaned = value.strip() if isinstance(value, str) else None
+        return cleaned or None
+
+    @field_validator("legs")
+    @classmethod
+    def validate_manual_parlay_legs(cls, value: list[str]) -> list[str]:
+        cleaned = [leg.strip() for leg in value if isinstance(leg, str) and leg.strip()]
+        if len(cleaned) < 2:
+            raise ValueError("Enter at least two parlay legs.")
+        if len(cleaned) > 10:
+            raise ValueError("A manual parlay can contain up to 10 legs.")
+        return cleaned
+
+    @field_validator("decimal_odds")
+    @classmethod
+    def validate_manual_parlay_odds(cls, value: float) -> float:
+        if value <= 1:
+            raise ValueError("Combined decimal odds must be above 1.00.")
+        return value
+
+    @field_validator("stake")
+    @classmethod
+    def validate_manual_parlay_stake(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("Enter a stake greater than $0.")
+        return value
+
+    @field_validator("profit_boost_pct")
+    @classmethod
+    def validate_manual_parlay_boost(cls, value: float) -> float:
+        if value < 0:
+            raise ValueError("Profit boost cannot be negative.")
+        return value
+
+    @field_validator("actual_total_return", "settlement_amount")
+    @classmethod
+    def validate_manual_parlay_amounts(cls, value: float | None) -> float | None:
+        if value is not None and value < 0:
+            raise ValueError("Amounts cannot be negative.")
+        return value
+
+    @field_validator("season")
+    @classmethod
+    def validate_manual_parlay_season(cls, value: int | None) -> int | None:
+        if value is not None and not 2020 <= value <= 2100:
+            raise ValueError("Season must be between 2020 and 2100.")
+        return value
+
+    @field_validator("week")
+    @classmethod
+    def validate_manual_parlay_week(cls, value: int | None) -> int | None:
+        if value is not None and not 1 <= value <= 25:
+            raise ValueError("NFL week must be between 1 and 25.")
+        return value
+
+
 class TrackedParlaySettleRequest(BaseModel):
     status: Literal["won", "lost", "cashed_out", "cancelled", "push_adjusted", "void_adjusted"]
     settlement_amount: float | None = None
@@ -560,6 +634,50 @@ def _manual_bet_record(payload: ManualTrackedBetRequest) -> dict[str, Any]:
             "espn_event_id": None,
             "scheduled_kickoff": None,
         },
+    }
+
+
+def _manual_parlay_record(payload: ManualTrackedParlayRequest) -> dict[str, Any]:
+    """Create a parlay-ledger record without projecting or pricing its legs."""
+    if (payload.season is None) != (payload.week is None):
+        raise HTTPException(status_code=400, detail="Enter both season and NFL week, or leave both blank.")
+    if payload.status in {"cashed_out", "push_adjusted", "void_adjusted"} and payload.settlement_amount is None:
+        raise HTTPException(status_code=400, detail="Enter the actual amount paid by Bet365 for this outcome.")
+
+    effective_odds = round(1 + (payload.decimal_odds - 1) * (1 + payload.profit_boost_pct / 100), 4)
+    winning_total_return = payload.actual_total_return if payload.actual_total_return is not None else round(payload.stake * effective_odds, 2)
+    if winning_total_return < payload.stake:
+        raise HTTPException(status_code=400, detail="Winning total return cannot be less than the stake.")
+    manual_legs = [
+        {
+            "description": leg,
+            "player_name": leg,
+            "team": None,
+            "opponent": None,
+            "market": "manual",
+            "side_label": "",
+            "line": None,
+            "decimal_odds": None,
+            "probability": None,
+            "result_identity": {"version": 1, "status": "manual_required", "season": payload.season, "week": payload.week},
+        }
+        for leg in payload.legs
+    ]
+    return {
+        "entry_origin": "manual",
+        "description": payload.description or f"{len(manual_legs)}-leg manual parlay",
+        "legs": manual_legs,
+        "original_decimal_odds": payload.decimal_odds,
+        "effective_decimal_odds": effective_odds,
+        "stake": payload.stake,
+        "bet_type": payload.bet_type,
+        "profit_boost_pct": payload.profit_boost_pct,
+        "actual_total_return": payload.actual_total_return,
+        "winning_total_return": round(winning_total_return, 2),
+        "independent_model_probability": None,
+        "personal_sensitivity_probability": None,
+        "season": payload.season,
+        "week": payload.week,
     }
 
 
@@ -1049,6 +1167,38 @@ def create_tracked_parlay(payload: TrackedParlayCreateRequest) -> dict[str, Any]
             "entry_origin": "parlay_evaluator",
         }
     )
+    return {"success": True, "parlay": parlay, "summary": parlay_tracker_store.summary()}
+
+
+@router.post("/tracker/parlays/manual")
+def create_manual_tracked_parlay(payload: ManualTrackedParlayRequest) -> dict[str, Any]:
+    """Save a free-text, tracking-only parlay without pretending it has model EV."""
+    parlay = parlay_tracker_store.create(_manual_parlay_record(payload))
+    if payload.status != "pending":
+        try:
+            parlay = parlay_tracker_store.settle(parlay["id"], payload.status, payload.settlement_amount)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"success": True, "parlay": parlay, "summary": parlay_tracker_store.summary()}
+
+
+@router.put("/tracker/parlays/{parlay_id}/manual")
+def update_manual_tracked_parlay(parlay_id: str, payload: ManualTrackedParlayRequest) -> dict[str, Any]:
+    """Correct the legs and financial record of a manual parlay."""
+    existing = next((parlay for parlay in parlay_tracker_store.list() if parlay["id"] == parlay_id), None)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Tracked parlay not found.")
+    if existing.get("entry_origin") != "manual":
+        raise HTTPException(status_code=409, detail="Only a manual parlay can be edited here.")
+    try:
+        parlay = parlay_tracker_store.update(
+            parlay_id,
+            {**_manual_parlay_record(payload), "status": payload.status, "settlement_amount": payload.settlement_amount},
+        )
+    except TrackedParlayNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Tracked parlay not found.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"success": True, "parlay": parlay, "summary": parlay_tracker_store.summary()}
 
 
