@@ -769,6 +769,7 @@ def tracker_overall_summary(include_pending: bool = True, include_parlays: bool 
             "total_profit": total_profit,
             "cash_wagered": round(float(straight["cash_wagered"]) + float(included_parlay["cash_wagered"]), 2),
             "bonus_value_used": round(float(straight["bonus_stake_used"]) + float(included_parlay["bonus_value_used"]), 2),
+            "cash_roi_pct": round(cash_profit / cash_staked * 100, 2) if cash_staked else None,
             "total_roi_on_cash_risk_pct": round(total_profit / cash_staked * 100, 2) if cash_staked else None,
         },
     }

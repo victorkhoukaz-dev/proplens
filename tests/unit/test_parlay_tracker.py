@@ -98,6 +98,7 @@ def test_overall_summary_can_include_or_exclude_parlays(tmp_path, monkeypatch):
     straight_only = client.get("/api/tracker/overall-summary?include_parlays=false").json()["summary"]
     assert combined["total_profit"] == 30.0
     assert combined["cash_wagered"] == 14.0
+    assert combined["cash_roi_pct"] == 214.29
     assert combined["total_roi_on_cash_risk_pct"] == 214.29
     assert straight_only["total_profit"] == 10.0
     assert straight_only["cash_wagered"] == 10.0

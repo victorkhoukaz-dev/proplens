@@ -153,7 +153,7 @@ This is intentionally **not the next phase**. The current Check results → expl
 
 ## Phase 3 — Parlays
 
-Status: Phase 3A (independence baseline and Bet365 boosts) and Phase 3B (personal sensitivity) are implemented. Phase 3C.0, the local parlay ledger, is ready for user testing; automatic result suggestions for parlay legs remain a later slice.
+Status: Phase 3A (independence baseline and Bet365 boosts), Phase 3B (personal sensitivity), and Phase 3C.0 (local parlay ledger) are implemented and user-tested. Automatic result suggestions for parlay legs remain deferred.
 
 ### Phase 3A — Manual parlay evaluator
 
@@ -195,7 +195,34 @@ Status: Phase 3A (independence baseline and Bet365 boosts) and Phase 3B (persona
 - Add estimated joint probabilities only when historical data or a defensible model supports them.
 - Never describe a guessed correlation adjustment as proven EV.
 
-## Phase 4 — Model improvement
+## Phase 4 — Tracker coverage and reporting
+
+Status: next practical product work. Complete this before returning to automatic parlay settlement or correlation research.
+
+### Phase 4A — Manual tracking entry
+
+- Add a fast **Track manual bet** path for player props without projections, defensive props, and game/other bets such as moneylines, spreads, totals, and custom bets.
+- Mark every record as **Evaluated** or **Manual** so tracking-only records are never treated as model-backed decisions in later research.
+- Allow free player entry, while suggesting imported-projection players when available; a separate player-directory import can be considered later if defensive-prop use makes it worthwhile.
+- Let eligible, precisely identified player-prop entries use a later result check; label all other manual records **Manual settlement required**.
+- Require the normal financial details and optionally capture team, opponent, position, market, side, line, season, and NFL week.
+
+### Phase 4B — Unified overall activity view
+
+- **Implemented, awaiting user testing:** when **Include parlays in overall view** is enabled, show straight bets and parlays together in the Bet tracker list.
+- Keep a parlay as one labelled activity row with compact leg detail and an Open action; do not duplicate each leg as a separate bet row.
+- Provide an activity filter for all activity, straight bets, or parlays while retaining cash/bonus, status, search, and sort filters.
+- Keep the dedicated Parlay tracker as the detailed place to settle, adjust, or edit a parlay.
+
+### Phase 4C — NFL-week filtering and weekly ROI
+
+- Add reporting filters and summary metrics by NFL season and NFL week, rather than calendar date entered.
+- Apply the existing cash-bet ROI, total ROI on cash risk, cash wagered, bonus value used, and profit definitions consistently within the selected week.
+- Keep records without reliable season/week context visibly **Unassigned** and exclude them from weekly totals rather than guessing.
+- A parlay belongs to a week only when all legs have the same reliable NFL week; otherwise mark it Unassigned until corrected.
+- Require a manually entered season/week for a manual bet to appear in an NFL-week report.
+
+## Phase 5 — Model improvement
 
 Status: future research.
 
@@ -213,7 +240,7 @@ Status: future research.
 - Use the original snapshot and eventual actual result for future calibration and accuracy research.
 - If an updated projection needs inspection later, save it as a separate timestamped comparison evaluation rather than modifying the original tracked bet.
 
-## Phase 5 — Reporting and bankroll insight
+## Phase 6 — Additional reporting and bankroll insight
 
 Status: optional future work.
 
@@ -223,13 +250,6 @@ Status: optional future work.
 - Bankroll curve and drawdown.
 - Optional closing-line-value tracking when closing odds can be entered or obtained reliably.
 - Exportable tracker history and backups.
-
-### NFL-week ROI reporting
-
-- Add reporting filters and summary metrics by NFL season and NFL week, rather than calendar date entered.
-- Apply the existing cash-bet ROI, total ROI on cash risk, cash wagered, bonus value used, and profit definitions consistently within the selected week.
-- Keep bets without reliable season/week context visibly **Unassigned** and exclude them from weekly totals rather than guessing.
-- Require a manually entered season/week for a manual bet to appear in an NFL-week report.
 
 ## External odds acquisition
 
@@ -242,12 +262,11 @@ Status: monitor and test opportunistically; do not make it the core workflow yet
 
 ## Current recommended order
 
-1. Finish Phase 3A usability testing with both cross-game and same-game slips. Confirm that its labels are clear enough to prevent treating an independent baseline as proven SGP value.
-2. Keep Phase 2C's explicit result-confirmation workflow in live use and revisit automatic settlement only after the documented live-week trial.
-3. Review the next practical tracker extension: manual straight-bet entry and NFL-week reporting are likely more useful before parlay tracking because they make the current weekly workflow complete.
-4. Add Phase 3A Bet365 boost support before judging boosted parlays with the calculator.
-5. Decide whether the next major parlay step should be Phase 3B belief/sensitivity analysis or Phase 3C parlay tracking, based on the actual workflow that proves more useful.
-6. Treat correlation and player-specific modeling as later evidence-driven improvements.
+1. Test Phase 4B's optional unified activity view with both straight bets and parlays.
+2. Build Phase 4A manual tracking entry, including defensive and non-player bets, before requiring any separate player-directory import.
+3. Build Phase 4C NFL-week filters and weekly ROI after manual entries can provide season/week context.
+4. Return to Phase 3C.1 for cautious, confirm-only parlay result suggestions.
+5. Treat Phase 3D correlation and Phase 5 model improvement as later evidence-driven work.
 
 ## Product safety principles
 
