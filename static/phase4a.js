@@ -32,6 +32,8 @@
     ],
     custom: [['custom', 'Other / custom bet']],
   };
+  const positionMarketDefaults = { QB: 'passing_yards', RB: 'rushing_yards', WR: 'receiving_yards', TE: 'receiving_yards' };
+  window.proplensManualEntryConfig = { markets, positionMarketDefaults };
 
   const value = id => $(id).value.trim();
   const numberOrNull = id => value(id) === '' ? null : Number(value(id));
@@ -61,8 +63,7 @@
   }
 
   function applyDefaultMarketForPosition() {
-    const defaults = { QB: 'passing_yards', RB: 'rushing_yards', WR: 'receiving_yards', TE: 'receiving_yards' };
-    const defaultMarket = defaults[$('#manual-position').value];
+    const defaultMarket = positionMarketDefaults[$('#manual-position').value];
     if (defaultMarket && [...market.options].some(option => option.value === defaultMarket)) market.value = defaultMarket;
   }
 

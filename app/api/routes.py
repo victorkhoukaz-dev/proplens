@@ -320,11 +320,40 @@ class TrackedParlayCreateRequest(BaseModel):
         return value
 
 
+class ManualTrackedParlayLegRequest(BaseModel):
+    """One manual parlay leg, entered as guided fields or unrestricted text."""
+
+    entry_mode: Literal["structured", "free_text"] = "free_text"
+    description: str
+    category: Literal["player_prop", "game_bet", "custom"] | None = None
+    player_name: str | None = None
+    position: str | None = None
+    team: str | None = None
+    opponent: str | None = None
+    market: str | None = None
+    side_label: str | None = None
+    line: float | None = None
+
+    @field_validator("description")
+    @classmethod
+    def clean_manual_parlay_leg_description(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Every parlay leg needs a description.")
+        return cleaned
+
+    @field_validator("player_name", "position", "team", "opponent", "market", "side_label")
+    @classmethod
+    def clean_optional_manual_parlay_leg_text(cls, value: str | None) -> str | None:
+        cleaned = value.strip() if isinstance(value, str) else None
+        return cleaned or None
+
+
 class ManualTrackedParlayRequest(BaseModel):
-    """A tracking-only parlay with free-text legs and no model calculation."""
+    """A tracking-only parlay with guided or free-text legs and no model calculation."""
 
     description: str | None = None
-    legs: list[str]
+    legs: list[ManualTrackedParlayLegRequest]
     decimal_odds: float
     stake: float
     bet_type: Literal["cash", "bonus"]
@@ -341,15 +370,29 @@ class ManualTrackedParlayRequest(BaseModel):
         cleaned = value.strip() if isinstance(value, str) else None
         return cleaned or None
 
+    @field_validator("legs", mode="before")
+    @classmethod
+    def normalize_legacy_manual_parlay_legs(cls, value: Any) -> Any:
+        if not isinstance(value, list):
+            return value
+        return [
+            {"entry_mode": "free_text", "description": leg.strip()}
+            if isinstance(leg, str)
+            else leg
+            for leg in value
+            if not isinstance(leg, str) or leg.strip()
+        ]
+
     @field_validator("legs")
     @classmethod
-    def validate_manual_parlay_legs(cls, value: list[str]) -> list[str]:
-        cleaned = [leg.strip() for leg in value if isinstance(leg, str) and leg.strip()]
-        if len(cleaned) < 2:
+    def validate_manual_parlay_legs(
+        cls, value: list[ManualTrackedParlayLegRequest]
+    ) -> list[ManualTrackedParlayLegRequest]:
+        if len(value) < 2:
             raise ValueError("Enter at least two parlay legs.")
-        if len(cleaned) > 10:
+        if len(value) > 10:
             raise ValueError("A manual parlay can contain up to 10 legs.")
-        return cleaned
+        return value
 
     @field_validator("decimal_odds")
     @classmethod
@@ -648,21 +691,32 @@ def _manual_parlay_record(payload: ManualTrackedParlayRequest) -> dict[str, Any]
     winning_total_return = payload.actual_total_return if payload.actual_total_return is not None else round(payload.stake * effective_odds, 2)
     if winning_total_return < payload.stake:
         raise HTTPException(status_code=400, detail="Winning total return cannot be less than the stake.")
-    manual_legs = [
-        {
-            "description": leg,
-            "player_name": leg,
-            "team": None,
-            "opponent": None,
-            "market": "manual",
-            "side_label": "",
-            "line": None,
-            "decimal_odds": None,
-            "probability": None,
-            "result_identity": {"version": 1, "status": "manual_required", "season": payload.season, "week": payload.week},
+    manual_legs = []
+    for leg in payload.legs:
+        result_identity = {
+            "version": 1,
+            "status": "manual_required",
+            "season": payload.season,
+            "week": payload.week,
+            "position": leg.position,
         }
-        for leg in payload.legs
-    ]
+        manual_legs.append(
+            {
+                "entry_mode": leg.entry_mode,
+                "description": leg.description,
+                "category": leg.category,
+                "player_name": leg.player_name or leg.description,
+                "position": leg.position,
+                "team": leg.team,
+                "opponent": leg.opponent,
+                "market": leg.market or "manual",
+                "side_label": leg.side_label or "",
+                "line": leg.line,
+                "decimal_odds": None,
+                "probability": None,
+                "result_identity": result_identity,
+            }
+        )
     return {
         "entry_origin": "manual",
         "description": payload.description or f"{len(manual_legs)}-leg manual parlay",

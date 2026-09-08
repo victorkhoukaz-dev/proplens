@@ -67,6 +67,40 @@ def test_manual_parlay_can_be_corrected_and_settled(client):
     assert corrected["status"] == "won"
 
 
+def test_manual_parlay_can_mix_guided_and_free_text_legs(client):
+    response = client.post(
+        "/api/tracker/parlays/manual",
+        json=payload(
+            legs=[
+                {
+                    "entry_mode": "structured",
+                    "description": "Saquon Barkley · Over · 64.5 · Rushing yards",
+                    "category": "player_prop",
+                    "player_name": "Saquon Barkley",
+                    "position": "RB",
+                    "team": "PHI",
+                    "opponent": "DAL",
+                    "market": "rushing_yards",
+                    "side_label": "Over",
+                    "line": 64.5,
+                },
+                {"entry_mode": "free_text", "description": "Eagles moneyline"},
+            ]
+        ),
+    )
+
+    assert response.status_code == 200
+    guided, free_text = response.json()["parlay"]["legs"]
+    assert guided["entry_mode"] == "structured"
+    assert guided["player_name"] == "Saquon Barkley"
+    assert guided["market"] == "rushing_yards"
+    assert guided["line"] == 64.5
+    assert guided["result_identity"]["position"] == "RB"
+    assert free_text["entry_mode"] == "free_text"
+    assert free_text["market"] == "manual"
+    assert free_text["description"] == "Eagles moneyline"
+
+
 def test_manual_parlay_requires_two_legs_and_complete_week_context(client):
     one_leg = client.post("/api/tracker/parlays/manual", json=payload(legs=["Eagles moneyline"]))
     partial_week = client.post("/api/tracker/parlays/manual", json=payload(week=None))

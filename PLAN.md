@@ -1,6 +1,6 @@
 # PropLens Product Plan
 
-Last updated: September 5, 2026
+Last updated: September 8, 2026
 
 This document is the working product reference for PropLens. It records the direction we agreed on, what exists today, what still needs testing, and the order in which we intend to build it. It is a plan, not a promise that every later feature must be implemented unchanged.
 
@@ -10,7 +10,7 @@ PropLens is a practical NFL betting assistant built around three jobs:
 
 1. Evaluate a manually entered Bet365 player-prop price against an imported projection model.
 2. Record and review bets with accurate cash, bonus-bet, ROI, and settlement accounting.
-3. Eventually evaluate and track parlays, including a transparent independent-leg baseline and carefully labelled correlation adjustments.
+3. Evaluate and track parlays with a transparent independent-leg baseline, manual sensitivity inputs, boost accounting, and clearly separated manual-only records.
 
 Automatic Bet365 Canada player-prop odds remain desirable, but they are not the foundation of the product until a legal, reliable, affordable source proves exact coverage for the required player, market, side, and line.
 
@@ -52,7 +52,7 @@ Status: implemented and under continued real-world testing.
 
 ### Phase 2A — Straight-bet tracker
 
-Status: implemented and being tested.
+Status: implemented and user-tested; continue validating it during real weekly use.
 
 - Save an evaluated straight bet as pending.
 - Track cash bets and bonus bets separately.
@@ -63,9 +63,9 @@ Status: implemented and being tested.
 - Include or exclude pending bets from wager totals.
 - Provide compact search, filtering, sorting, and row actions for a 20–30 bet week.
 
-#### Future extension — Manual straight-bet entry
+#### Manual straight-bet extension — implemented and user-tested
 
-- Add a fast **Track manual bet** path for a player without projections, an unsupported market, or a bet placed before projections are published.
+- Provide a fast **Track manual bet** path for a player without projections, an unsupported market, or a bet placed before projections are published.
 - This is track-only: it records the wager but never invents a projection, fair price, EV, or model probability.
 - Collect the normal financial details plus optional season, NFL week, team, opponent, and supported-market identity details.
 - Allow result-check suggestions only when the manual entry has complete compatible identity data; otherwise label it **Manual settlement required**.
@@ -166,14 +166,14 @@ Status: Phase 3A (independence baseline and Bet365 boosts), Phase 3B (personal s
 - Detect same-game legs and explicitly state that neither a positive nor negative independence-baseline EV is a correlation-adjusted value verdict.
 - Show the price gap versus independent fair odds as a comparison, not as proof of value for a same-game parlay.
 
-#### Future extension — Bet365 parlay boosts
+#### Bet365 parlay boosts — implemented and user-tested
 
-- Add an optional Bet365 **profit boost %** to the manual parlay calculator.
+- Accept an optional Bet365 **profit boost %** in the manual parlay calculator.
 - Calculate boosted total return as `stake + ((decimal odds − 1) × stake × (1 + boost percentage))`.
 - Show the original Bet365 odds alongside the effective boosted return/odds, and use the boosted value for break-even chance, independence-baseline EV, win outcome, and long-run estimated net result.
 - Provide an optional **Actual boosted return** override for unusual offers; when entered, it is authoritative over the percentage calculation.
 - State clearly that PropLens calculates from the entered promotion details only and does not verify Bet365 eligibility, maximum stakes, or offer terms.
-- Save original odds, boost details, and final boosted payout when Phase 3C parlay tracking is implemented.
+- Save original odds, boost details, and final boosted payout in the Phase 3C parlay record.
 
 ### Phase 3B — Belief and sensitivity analysis
 
@@ -184,8 +184,8 @@ Status: Phase 3A (independence baseline and Bet365 boosts), Phase 3B (personal s
 ### Phase 3C — Parlay tracker
 
 - Save a parlay and all component legs, plus original odds, effective boosted odds, boost/return treatment, stake type, and calculated winning return.
-- **Phase 3C.0 — implemented, awaiting user testing:** manually track pending, won, lost, push-adjusted, void-adjusted, cashed-out, and cancelled parlays; correct saved financial details or settlement later; delete a test/error record deliberately. Keep straight and parlay ledgers separate, but offer a concise optional combined overall-performance roll-up for total profit, ROI on cash risk, cash wagered, and bonus value used.
-- **Manual-parlay extension — implemented, awaiting user testing:** add a separate **Track manual parlay** path for bets whose legs were not evaluated, are unsupported, or were placed before projections were available. Record 2–10 free-text legs, combined Bet365 odds, stake, cash/bonus type, optional profit boost or exact return, and optional shared season/week. Label it **Manual** and save no probability, fair odds, or EV. This keeps it eligible for normal financial tracking and later correction without misrepresenting it as model-backed or correlation-tested.
+- **Phase 3C.0 — implemented and user-tested:** manually track pending, won, lost, push-adjusted, void-adjusted, cashed-out, and cancelled parlays; correct saved financial details or settlement later; delete a test/error record deliberately. Keep straight and parlay ledgers separate, but offer a concise optional combined overall-performance roll-up for total profit, ROI on cash risk, cash wagered, and bonus value used.
+- **Manual-parlay extension — hybrid builder implemented, awaiting user testing:** provide a separate **Track manual parlay** path for bets whose legs were not evaluated, are unsupported, or were placed before projections were available. Guided legs retain category, player, position, teams, market, side, and line; unrestricted free-text legs remain available in the same parlay. Record 2–10 mixed legs, combined Bet365 odds, stake, cash/bonus type, optional profit boost or exact return, and optional shared season/week. Label it **Manual** and save no probability, fair odds, or EV.
 - **Phase 3C.1 — future:** reuse Phase 2C game/player identifiers and result checks for every eligible leg, then present a cautious whole-parlay settlement suggestion only when all required legs have final, unambiguous results.
 - Apply sportsbook repricing rules cautiously when a leg pushes or is voided.
 
@@ -198,11 +198,11 @@ Status: Phase 3A (independence baseline and Bet365 boosts), Phase 3B (personal s
 
 ## Phase 4 — Tracker coverage and reporting
 
-Status: next practical product work. Complete this before returning to automatic parlay settlement or correlation research.
+Status: manual coverage and unified activity are implemented. Weekly filtering is the next planned reporting step after hybrid-parlay testing.
 
 ### Phase 4A — Manual tracking entry
 
-- **Implemented, awaiting user testing:** add a fast **Track manual bet** path for player props without projections, defensive props, and game/other bets such as moneylines, spreads, totals, and custom bets.
+- **Implemented and user-tested:** provide a fast **Track manual bet** path for player props without projections, defensive props, and game/other bets such as moneylines, spreads, totals, and custom bets.
 - Save an explicit **Manual** origin and blank model fields so tracking-only records are never treated as model-backed decisions in later research; newly saved evaluator bets receive an explicit **Evaluated** origin.
 - Allow free player entry while suggesting players from the active projection set; selecting one can fill its team, opponent, and position. A separate player-directory import can be considered later if defensive-prop use makes it worthwhile.
 - Keep Phase 4A manual entries on manual settlement for this first safe version. Precisely identified supported player props can be connected to result checks in a later extension after their identity and grading behavior are tested.
@@ -213,7 +213,7 @@ Status: next practical product work. Complete this before returning to automatic
 
 ### Phase 4B — Unified overall activity view
 
-- **Implemented, awaiting user testing:** when **Include parlays in overall view** is enabled, show straight bets and parlays together in the Bet tracker list.
+- **Implemented and user-tested:** when **Include parlays in overall view** is enabled, show straight bets and parlays together in the Bet tracker list.
 - Keep a parlay as one labelled activity row with compact leg detail and an Open action; do not duplicate each leg as a separate bet row.
 - Provide an activity filter for all activity, straight bets, or parlays while retaining cash/bonus, status, search, and sort filters.
 - Keep the dedicated Parlay tracker as the detailed place to settle, adjust, or edit a parlay.
@@ -266,11 +266,26 @@ Status: monitor and test opportunistically; do not make it the core workflow yet
 
 ## Current recommended order
 
-1. Test Phase 4A manual entry with one offensive/defensive player prop, one game bet, and one custom bet; verify editing, settlement, and combined ROI behavior.
-2. Build Phase 4C NFL-week filters and weekly ROI now that manual entries can provide season/week context.
-3. Reassess whether a separate all-player directory is useful after real defensive-prop usage.
-4. Return to Phase 3C.1 for cautious, confirm-only parlay result suggestions.
+1. Test the hybrid manual-parlay builder with guided legs, free-text legs, and a mixture of both; verify editing and overall ROI inclusion.
+2. Build Phase 4C NFL-week filters and weekly ROI now that straight bets and manual parlays can carry season/week context.
+3. Use PropLens through real NFL workflow and record friction before expanding data-entry automation.
+4. Return to Phase 3C.1 for cautious, confirm-only parlay result suggestions when real parlay tracking justifies it.
 5. Treat Phase 3D correlation and Phase 5 model improvement as later evidence-driven work.
+
+## Potential future options — revisit after real workflow testing
+
+These are deliberately **not committed implementation phases**. This section is the single place to review ideas that may become valuable after real use reveals which problems are frequent enough to solve.
+
+- **Bet365 screenshot-to-draft:** upload or paste a bet-slip screenshot, extract its legs, combined odds, stake, boost, and return, then prefill a reviewable manual-parlay draft. Never save directly from OCR; require the user to verify every extracted number and side first.
+- **Evaluated-leg shortcut inside the manual-parlay builder:** allow an already evaluated PropLens leg to be inserted beside guided manual and free-text legs. Revisit if users frequently build mixed model-backed/manual parlays; preserve per-leg origin so the whole parlay is never mislabelled as fully modeled.
+- **Complete active-player directory:** import or maintain offensive and defensive NFL rosters so manual player entry can autocomplete beyond the active projection file. Revisit after defensive-prop usage shows whether projection-only suggestions are insufficient.
+- **High-confidence automatic settlement (Phase 2C.5):** consider only after several live weeks demonstrate reliable matching and no unexplained Bet365 grading discrepancies. Keep explicit confirmation as a permanent fallback.
+- **Faster or supported sports-stat provider:** reconsider ESPN, API-Sports, or another provider if same-day results, play-by-play, or supported service guarantees justify cost and integration work. Re-test price and coverage before any purchase.
+- **Parlay result suggestions (Phase 3C.1):** suggest a whole-parlay outcome only when every required structured leg has an exact, final, supported result. Keep free-text and ambiguous legs on manual settlement.
+- **Correlation estimates (Phase 3D):** move beyond the independence baseline only with defensible historical evidence. Do not convert a guessed relationship into an EV verdict.
+- **Player-specific model calibration:** estimate volatility by market, position, and eventually player only after enough actual results exist; preserve the current simple model as the comparison baseline.
+- **Reliable automatic Bet365 odds acquisition:** periodically reassess legal, affordable sources for exact Bet365 Canada/international player-prop lines. Do not revive brittle browser harvesting without materially better evidence.
+- **Deployment and multi-device access:** consider durable hosted storage only if local-only use becomes inconvenient; do not publish tracker data or move it to a paid service without an explicit privacy and cost decision.
 
 ## Product safety principles
 
