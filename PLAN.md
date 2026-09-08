@@ -63,6 +63,14 @@ Status: implemented and being tested.
 - Include or exclude pending bets from wager totals.
 - Provide compact search, filtering, sorting, and row actions for a 20–30 bet week.
 
+#### Future extension — Manual straight-bet entry
+
+- Add a fast **Track manual bet** path for a player without projections, an unsupported market, or a bet placed before projections are published.
+- This is track-only: it records the wager but never invents a projection, fair price, EV, or model probability.
+- Collect the normal financial details plus optional season, NFL week, team, opponent, and supported-market identity details.
+- Allow result-check suggestions only when the manual entry has complete compatible identity data; otherwise label it **Manual settlement required**.
+- Label manual records separately from evaluated records so future model reporting cannot treat them as model-backed decisions.
+
 ### Phase 2B — Faster player and game selection
 
 Status: implemented and being tested.
@@ -158,6 +166,15 @@ Status: Phase 3A is implemented as a temporary manual calculator and is in user-
 - Detect same-game legs and explicitly state that neither a positive nor negative independence-baseline EV is a correlation-adjusted value verdict.
 - Show the price gap versus independent fair odds as a comparison, not as proof of value for a same-game parlay.
 
+#### Future extension — Bet365 parlay boosts
+
+- Add an optional Bet365 **profit boost %** to the manual parlay calculator.
+- Calculate boosted total return as `stake + ((decimal odds − 1) × stake × (1 + boost percentage))`.
+- Show the original Bet365 odds alongside the effective boosted return/odds, and use the boosted value for break-even chance, independence-baseline EV, win outcome, and long-run estimated net result.
+- Provide an optional **Actual boosted return** override for unusual offers; when entered, it is authoritative over the percentage calculation.
+- State clearly that PropLens calculates from the entered promotion details only and does not verify Bet365 eligibility, maximum stakes, or offer terms.
+- Save original odds, boost details, and final boosted payout when Phase 3C parlay tracking is implemented.
+
 ### Phase 3B — Belief and sensitivity analysis
 
 - Let the user adjust confidence in one or more legs without pretending the adjustment is objective.
@@ -189,6 +206,13 @@ Status: future research.
 - Measure calibration, bias, and closing-line performance rather than judging the model from isolated bets.
 - Preserve the current simple model as an understandable baseline.
 
+### Evaluation history and projection updates
+
+- Treat every saved evaluated bet as an immutable decision-time model snapshot: projection-set ID/label, projection, market, line, odds, model probability, fair odds, and EV.
+- Never recalculate or overwrite that snapshot after a later projection import.
+- Use the original snapshot and eventual actual result for future calibration and accuracy research.
+- If an updated projection needs inspection later, save it as a separate timestamped comparison evaluation rather than modifying the original tracked bet.
+
 ## Phase 5 — Reporting and bankroll insight
 
 Status: optional future work.
@@ -199,6 +223,13 @@ Status: optional future work.
 - Bankroll curve and drawdown.
 - Optional closing-line-value tracking when closing odds can be entered or obtained reliably.
 - Exportable tracker history and backups.
+
+### NFL-week ROI reporting
+
+- Add reporting filters and summary metrics by NFL season and NFL week, rather than calendar date entered.
+- Apply the existing cash-bet ROI, total ROI on cash risk, cash wagered, bonus value used, and profit definitions consistently within the selected week.
+- Keep bets without reliable season/week context visibly **Unassigned** and exclude them from weekly totals rather than guessing.
+- Require a manually entered season/week for a manual bet to appear in an NFL-week report.
 
 ## External odds acquisition
 
@@ -213,8 +244,10 @@ Status: monitor and test opportunistically; do not make it the core workflow yet
 
 1. Finish Phase 3A usability testing with both cross-game and same-game slips. Confirm that its labels are clear enough to prevent treating an independent baseline as proven SGP value.
 2. Keep Phase 2C's explicit result-confirmation workflow in live use and revisit automatic settlement only after the documented live-week trial.
-3. Decide whether the next parlay step should be Phase 3B belief/sensitivity analysis or Phase 3C parlay tracking, based on the actual workflow that proves more useful.
-4. Treat correlation and player-specific modeling as later evidence-driven improvements.
+3. Review the next practical tracker extension: manual straight-bet entry and NFL-week reporting are likely more useful before parlay tracking because they make the current weekly workflow complete.
+4. Add Phase 3A Bet365 boost support before judging boosted parlays with the calculator.
+5. Decide whether the next major parlay step should be Phase 3B belief/sensitivity analysis or Phase 3C parlay tracking, based on the actual workflow that proves more useful.
+6. Treat correlation and player-specific modeling as later evidence-driven improvements.
 
 ## Product safety principles
 

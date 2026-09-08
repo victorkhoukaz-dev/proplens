@@ -2,7 +2,7 @@
 (() => {
   const $ = selector => document.querySelector(selector);
   const labels = { passing_yards: 'Passing yards', passing_tds: 'Passing TDs', passing_interceptions: 'Interceptions', rushing_yards: 'Rushing yards', receiving_yards: 'Receiving yards', receptions: 'Receptions', anytime_td: 'Anytime TD' };
-  const modal = $('#parlay-modal'), list = $('#parlay-leg-list'), count = $('#parlay-leg-count'), oddsInput = $('#parlay-odds'), stakeInput = $('#parlay-stake'), results = $('#parlay-results'), warning = $('#parlay-warning'), guide = $('#parlay-reading-guide'), clear = $('#btn-clear-parlay'), suggestions = $('#toast-container');
+  const modal = $('#parlay-modal'), list = $('#parlay-leg-list'), count = $('#parlay-leg-count'), oddsInput = $('#parlay-odds'), stakeInput = $('#parlay-stake'), boostInput = $('#parlay-boost'), actualReturnInput = $('#parlay-actual-return'), results = $('#parlay-results'), warning = $('#parlay-warning'), guide = $('#parlay-reading-guide'), clear = $('#btn-clear-parlay'), suggestions = $('#toast-container');
   const key = 'proplens.phase3a.parlay-slip';
   let legs = [];
   const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[character]));
@@ -26,14 +26,22 @@
     calculate();
   }
   function calculate() {
-    const combinedOdds = Number(oddsInput.value), stake = stakeInput.value.trim() === '' ? null : Number(stakeInput.value);
+    const combinedOdds = Number(oddsInput.value), stake = stakeInput.value.trim() === '' ? null : Number(stakeInput.value), boostPercent = boostInput.value.trim() === '' ? 0 : Number(boostInput.value), actualReturn = actualReturnInput.value.trim() === '' ? null : Number(actualReturnInput.value);
     if (legs.length < 2 || !Number.isFinite(combinedOdds) || combinedOdds <= 1) { results.innerHTML = '<p class="field-help">Add at least two evaluated legs and enter the actual Bet365 combined price to calculate the baseline.</p>'; guide.hidden = true; return; }
+    if (!Number.isFinite(boostPercent) || boostPercent < 0) { results.innerHTML = '<p class="field-help">Enter a profit boost of 0% or more.</p>'; guide.hidden = true; return; }
+    if (actualReturn !== null && (!Number.isFinite(actualReturn) || actualReturn < 0 || stake === null || !Number.isFinite(stake) || stake <= 0)) { results.innerHTML = '<p class="field-help">Enter a stake greater than $0 before using an actual boosted return.</p>'; guide.hidden = true; return; }
+    if (actualReturn !== null && actualReturn < stake) { results.innerHTML = '<p class="field-help">Actual boosted return cannot be less than the stake.</p>'; guide.hidden = true; return; }
     const probability = legs.reduce((total, leg) => total * Number(leg.probability), 1);
-    const fairOdds = 1 / probability, breakEven = 1 / combinedOdds, ev = probability * combinedOdds - 1;
-    const stakeDetails = stake !== null && Number.isFinite(stake) && stake >= 0 ? `<div class="parlay-stake-details"><p>Win outcome: <strong>${money(stake * combinedOdds)} return</strong> <span>(${money(stake * (combinedOdds - 1))} net profit)</span></p><p>Independent long-run estimated net result: <strong class="${ev >= 0 ? 'positive' : 'negative'}">${ev >= 0 ? '+' : ''}${money(stake * ev)}</strong></p></div>` : '';
-    results.innerHTML = `<div class="parlay-metrics">${metric('Independent win chance', percent(probability), 'Multiply each leg\'s model win probability. This is only a baseline when the legs are from the same game.')}${metric('Independent fair odds', fairOdds.toFixed(2), 'The decimal odds that would break even in the long run if the independent win chance were correct. It equals 1 divided by that chance.')}${metric('Actual Bet365 odds', combinedOdds.toFixed(2), 'The exact combined decimal odds entered from Bet365. A $1 winning bet returns this amount including the $1 stake.')}${metric('Bet365 break-even chance', percent(breakEven), 'The win chance required to break even at the entered Bet365 odds. It equals 1 divided by the decimal odds.')}${metric('Independent-baseline EV', `${ev >= 0 ? '+' : ''}${(ev * 100).toFixed(1)}%`, 'The estimated long-run return per dollar staked: independent win chance multiplied by Bet365 odds, minus 1. For same-game parlays, this is not correlation-adjusted EV.', ev >= 0 ? 'positive' : 'negative')}</div>${stakeDetails}`;
+    const boostRate = boostPercent / 100;
+    const effectiveOdds = actualReturn !== null ? actualReturn / stake : 1 + ((combinedOdds - 1) * (1 + boostRate));
+    const fairOdds = 1 / probability, breakEven = 1 / effectiveOdds, ev = probability * effectiveOdds - 1;
+    const boostLabel = actualReturn !== null ? 'Exact return override' : boostPercent ? `+${boostPercent.toFixed(1)}% profit boost` : 'No boost';
+    const totalReturn = stake !== null && Number.isFinite(stake) && stake >= 0 ? (actualReturn ?? stake * effectiveOdds) : null;
+    const stakeDetails = totalReturn !== null ? `<div class="parlay-stake-details"><p>Win outcome: <strong>${money(totalReturn)} return</strong> <span>(${money(totalReturn - stake)} net profit)</span></p><p>Independent long-run estimated net result: <strong class="${ev >= 0 ? 'positive' : 'negative'}">${ev >= 0 ? '+' : ''}${money(stake * ev)}</strong></p></div>` : '';
+    results.innerHTML = `<div class="parlay-metrics">${metric('Independent win chance', percent(probability), 'Multiply each leg\'s model win probability. This is only a baseline when the legs are from the same game.')}${metric('Independent fair odds', fairOdds.toFixed(2), 'The decimal odds that would break even in the long run if the independent win chance were correct. It equals 1 divided by that chance.')}${metric('Original Bet365 odds', combinedOdds.toFixed(2), 'The unboosted combined decimal odds from Bet365. The boost is applied separately to the profit portion.')}${metric('Boost treatment', boostLabel, 'A standard profit boost increases only profit, not the stake. An exact total-return entry overrides the percentage because unusual offers can use different rules.')}${metric('Effective boosted odds', effectiveOdds.toFixed(2), 'The decimal odds equivalent of the entered profit boost or exact total return. Break-even chance and the independence baseline use this effective price.')}${metric('Boosted break-even chance', percent(breakEven), 'The win chance required to break even at the effective boosted odds. It equals 1 divided by those odds.')}${metric('Independent-baseline EV', `${ev >= 0 ? '+' : ''}${(ev * 100).toFixed(1)}%`, 'The estimated long-run return per dollar staked using the effective boosted odds. For same-game parlays, this is not correlation-adjusted EV.', ev >= 0 ? 'positive' : 'negative')}</div>${stakeDetails}`;
     guide.hidden = false;
-    guide.innerHTML = sameGame() ? '<strong>How to read this:</strong> The values below show what the parlay would look like if its legs were unrelated. They do not measure the true likelihood of this same-game parlay.' : '<strong>How to read this:</strong> The calculator multiplies the model probability for each leg. The resulting EV is a cross-game independence estimate, so model error still matters.';
+    const boostNote = actualReturn !== null ? 'The exact boosted return you entered overrides the percentage field.' : boostPercent ? `The calculator applies the ${boostPercent.toFixed(1)}% boost to profit only.` : 'No boost is applied.';
+    guide.innerHTML = sameGame() ? `<strong>How to read this:</strong> ${boostNote} The values below show what the parlay would look like if its legs were unrelated; they do not measure the true likelihood of this same-game parlay.` : `<strong>How to read this:</strong> ${boostNote} The calculator multiplies the model probability for each leg, so model error still matters.`;
   }
   function addEvaluation(data) {
     const { prop, model } = data || {};
@@ -47,6 +55,6 @@
   $('#btn-open-parlay').addEventListener('click', () => { modal.hidden = false; render(); });
   document.addEventListener('click', event => { const button = event.target.closest('#btn-add-to-parlay'); if (button) addEvaluation(window.proplensLatestEvaluation); const remove = event.target.closest('[data-remove-parlay-leg]'); if (remove) { legs.splice(Number(remove.dataset.removeParlayLeg), 1); save(); render(); } });
   clear.addEventListener('click', () => { if (!window.confirm('Clear every leg from this temporary parlay slip?')) return; legs = []; save(); render(); });
-  [oddsInput, stakeInput].forEach(input => input.addEventListener('input', calculate));
+  [oddsInput, stakeInput, boostInput, actualReturnInput].forEach(input => input.addEventListener('input', calculate));
   load(); render();
 })();

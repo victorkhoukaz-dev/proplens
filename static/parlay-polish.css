@@ -10,6 +10,17 @@
   max-height: min(270px, 34vh);
 }
 
+.parlay-inputs {
+  grid-template-columns: minmax(230px, 1fr) repeat(3, minmax(130px, 170px));
+}
+
+.parlay-boost-help {
+  margin: 7px 0 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
 .parlay-metric > span {
   display: flex;
   align-items: center;
@@ -67,5 +78,9 @@
   .parlay-leg-list {
     min-height: 102px;
     max-height: min(230px, 30vh);
+  }
+
+  .parlay-inputs {
+    grid-template-columns: 1fr 1fr;
   }
 }
