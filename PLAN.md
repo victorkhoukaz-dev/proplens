@@ -153,7 +153,7 @@ This is intentionally **not the next phase**. The current Check results → expl
 
 ## Phase 3 — Parlays
 
-Status: Phase 3A is implemented as a temporary manual calculator and is in user-experience testing. It does not yet save or settle parlays.
+Status: Phase 3A (independence baseline and Bet365 boosts) and Phase 3B (personal sensitivity) are implemented. Phase 3C.0, the local parlay ledger, is ready for user testing; automatic result suggestions for parlay legs remain a later slice.
 
 ### Phase 3A — Manual parlay evaluator
 
@@ -183,9 +183,9 @@ Status: Phase 3A is implemented as a temporary manual calculator and is in user-
 
 ### Phase 3C — Parlay tracker
 
-- Save a parlay and all component legs.
-- Reuse Phase 2C game/player identifiers and result checking for every leg.
-- Track pending, won, lost, push-adjusted, void-adjusted, cashed-out, and cancelled parlays.
+- Save a parlay and all component legs, plus original odds, effective boosted odds, boost/return treatment, stake type, and calculated winning return.
+- **Phase 3C.0 — implemented, awaiting user testing:** manually track pending, won, lost, push-adjusted, void-adjusted, cashed-out, and cancelled parlays; correct saved financial details or settlement later; delete a test/error record deliberately. Keep straight and parlay ledgers separate, but offer a concise optional combined overall-performance roll-up for total profit, ROI on cash risk, cash wagered, and bonus value used.
+- **Phase 3C.1 — future:** reuse Phase 2C game/player identifiers and result checks for every eligible leg, then present a cautious whole-parlay settlement suggestion only when all required legs have final, unambiguous results.
 - Apply sportsbook repricing rules cautiously when a leg pushes or is voided.
 
 ### Phase 3D — Correlation layer

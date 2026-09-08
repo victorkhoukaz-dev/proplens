@@ -2,7 +2,7 @@
 (() => {
   const $ = selector => document.querySelector(selector);
   const trackerModal = $('#tracker-modal'), saveModal = $('#save-bet-modal'), editModal = $('#edit-bet-modal'), cashoutModal = $('#cashout-modal');
-  const trackerList = $('#tracker-list'), trackerSummary = $('#tracker-summary'), trackerIncludePending = $('#tracker-include-pending'), trackerSearch = $('#tracker-search'), trackerStatusFilter = $('#tracker-status-filter'), trackerTypeFilter = $('#tracker-type-filter'), trackerSort = $('#tracker-sort'), trackerVisibleCount = $('#tracker-visible-count'), betType = $('#tracker-bet-type'), stake = $('#tracker-stake'), bonusHelp = $('#tracker-bonus-help'), checkResults = $('#btn-check-results'), resultPreview = $('#result-preview'), resultPreviewSummary = $('#result-preview-summary'), resultPreviewList = $('#result-preview-list'), toggleResultPreview = $('#btn-toggle-result-preview'), suggestionsOnly = $('#btn-suggestions-only');
+  const trackerList = $('#tracker-list'), trackerSummary = $('#tracker-summary'), trackerIncludePending = $('#tracker-include-pending'), trackerIncludeParlays = $('#tracker-include-parlays'), trackerSearch = $('#tracker-search'), trackerStatusFilter = $('#tracker-status-filter'), trackerTypeFilter = $('#tracker-type-filter'), trackerSort = $('#tracker-sort'), trackerVisibleCount = $('#tracker-visible-count'), betType = $('#tracker-bet-type'), stake = $('#tracker-stake'), bonusHelp = $('#tracker-bonus-help'), checkResults = $('#btn-check-results'), resultPreview = $('#result-preview'), resultPreviewSummary = $('#result-preview-summary'), resultPreviewList = $('#result-preview-list'), toggleResultPreview = $('#btn-toggle-result-preview'), suggestionsOnly = $('#btn-suggestions-only');
   let selectedBet = null, latestTrackerData = null, latestResultPreview = null, showingSuggestionsOnly = false;
   const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
   const money = value => `$${Number(value || 0).toFixed(2)}`;
@@ -57,6 +57,15 @@
     const visibleBets = filteredBets(data.bets); trackerVisibleCount.textContent = `Showing ${visibleBets.length} of ${data.bets.length}`;
     trackerList.innerHTML = visibleBets.length ? visibleBets.map(rowMarkup).join('') : '<p class="field-help tracker-empty">No bets match these filters.</p>';
   }
+  function renderOverall(data) {
+    const s = data.summary, included = data.include_parlays;
+    $('#overall-performance-context').textContent = included ? 'Straight bets + parlays' : 'Straight bets only';
+    $('#overall-total-profit').textContent = `${s.total_profit >= 0 ? '+' : ''}${money(s.total_profit)}`;
+    $('#overall-total-profit').className = s.total_profit >= 0 ? 'positive' : 'negative';
+    $('#overall-total-roi').textContent = percent(s.total_roi_on_cash_risk_pct);
+    $('#overall-cash-wagered').textContent = money(s.cash_wagered);
+    $('#overall-bonus-used').textContent = money(s.bonus_value_used);
+  }
   function previewMarkup(item) {
     const proposed = item.status === 'proposal' ? item.proposed_result : null;
     const outcome = proposed ? proposed[0].toUpperCase() + proposed.slice(1) : item.status === 'game_not_final' || item.status === 'stats_unavailable' ? 'Waiting for stats' : item.status === 'source_error' ? 'Try again later' : 'Needs review';
@@ -94,14 +103,22 @@
     resultPreviewList.innerHTML = latestResultPreview.proposals.length ? latestResultPreview.proposals.map(previewMarkup).join('') : '<p class="field-help">No pending bets remain in this result check.</p>';
     suggestionsOnly.textContent = showingSuggestionsOnly ? 'Show all bets' : `Suggestions only (${remaining})`;
   }
-  async function loadTracker() { render(await api(`/api/tracker/bets?include_pending=${trackerIncludePending.checked}`)); }
+  async function loadTracker() {
+    const pending = trackerIncludePending.checked, parlays = trackerIncludeParlays.checked;
+    const [trackerData, overallData] = await Promise.all([
+      api(`/api/tracker/bets?include_pending=${pending}`),
+      api(`/api/tracker/overall-summary?include_pending=${pending}&include_parlays=${parlays}`),
+    ]);
+    render(trackerData);
+    renderOverall(overallData);
+  }
   const findBet = id => (window.proplensTrackedBets || []).find(bet => bet.id === id);
   const refreshVisibleTracker = () => { if (latestTrackerData) render(latestTrackerData); };
   $('#btn-open-tracker').addEventListener('click', async () => { trackerModal.hidden = false; try { await loadTracker(); } catch (error) { toast(error.message, true); } });
   checkResults.addEventListener('click', async () => { checkResults.disabled = true; checkResults.textContent = 'Checking…'; try { const data = await api('/api/tracker/results/preview', { method: 'POST' }); renderResultPreview(data); refreshVisibleTracker(); toast(`Checked ${data.checked_pending} pending bet${data.checked_pending === 1 ? '' : 's'}. No results were changed.`); } catch (error) { toast(error.message, true); } finally { checkResults.disabled = false; checkResults.textContent = 'Check results'; } });
   toggleResultPreview.addEventListener('click', () => { const collapsed = resultPreview.classList.toggle('is-collapsed'); toggleResultPreview.textContent = collapsed ? 'Expand' : 'Collapse'; toggleResultPreview.setAttribute('aria-expanded', String(!collapsed)); });
   suggestionsOnly.addEventListener('click', () => { showingSuggestionsOnly = !showingSuggestionsOnly; suggestionsOnly.classList.toggle('active', showingSuggestionsOnly); suggestionsOnly.textContent = showingSuggestionsOnly ? 'Show all bets' : `Suggestions only (${latestResultPreview?.proposals.filter(item => item.status === 'proposal').length || 0})`; refreshVisibleTracker(); });
-  trackerIncludePending.addEventListener('change', () => loadTracker().catch(error => toast(error.message, true)));
+  [trackerIncludePending, trackerIncludeParlays].forEach(control => control.addEventListener('change', () => loadTracker().catch(error => toast(error.message, true))));
   [trackerSearch, trackerStatusFilter, trackerTypeFilter, trackerSort].forEach(control => control.addEventListener('input', refreshVisibleTracker));
   document.addEventListener('click', event => { const button = event.target.closest('#btn-save-evaluation'); if (!button) return; const evaluation = window.proplensLatestEvaluation; if (!evaluation) return toast('Evaluate this prop before saving it.', true); $('#save-bet-summary').textContent = `${evaluation.prop.player_name} ${evaluation.prop.side_label} ${evaluation.prop.line} at ${Number(evaluation.prop.bet365_decimal).toFixed(2)}.`; stake.value = evaluation.value.entered_stake ?? ''; betType.value = 'cash'; bonusHelp.hidden = true; saveModal.hidden = false; });
   betType.addEventListener('change', () => { bonusHelp.hidden = betType.value !== 'bonus'; });

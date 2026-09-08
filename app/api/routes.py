@@ -22,6 +22,7 @@ from app.core.normalizer import PlayerNameNormalizer, TeamNormalizer
 from app.core.distributions import DistributionEngine, DistributionType
 from app.core.ev import EVEngine, KellyConfig
 from app.db.bet_tracker_store import TrackedBetNotFoundError, bet_tracker_store
+from app.db.parlay_tracker_store import TrackedParlayNotFoundError, parlay_tracker_store
 from app.db.cache import cache
 from app.db.loaded_data_store import loaded_data_store
 from app.db.projection_snapshot_store import (
@@ -185,6 +186,118 @@ class TrackedBetSettleRequest(BaseModel):
     def validate_settlement_amount(cls, value: float | None) -> float | None:
         if value is not None and value < 0:
             raise ValueError("Cash-out amount cannot be negative.")
+        return value
+
+
+class TrackedParlayLegRequest(BaseModel):
+    player_name: str
+    team: str | None = None
+    opponent: str | None = None
+    market: str
+    side_label: str
+    line: float
+    decimal_odds: float
+    probability: float
+    result_identity: dict[str, Any] | None = None
+
+
+class TrackedParlayCreateRequest(BaseModel):
+    legs: list[TrackedParlayLegRequest]
+    original_decimal_odds: float
+    effective_decimal_odds: float
+    stake: float
+    bet_type: Literal["cash", "bonus"]
+    profit_boost_pct: float = 0
+    actual_total_return: float | None = None
+    independent_model_probability: float
+    personal_sensitivity_probability: float | None = None
+
+    @field_validator("legs")
+    @classmethod
+    def validate_parlay_legs(cls, value: list[TrackedParlayLegRequest]) -> list[TrackedParlayLegRequest]:
+        if len(value) < 2:
+            raise ValueError("A tracked parlay needs at least two legs.")
+        if len(value) > 10:
+            raise ValueError("A tracked parlay can contain up to 10 legs.")
+        return value
+
+    @field_validator("original_decimal_odds", "effective_decimal_odds")
+    @classmethod
+    def validate_parlay_odds(cls, value: float) -> float:
+        if value <= 1:
+            raise ValueError("Decimal odds must be above 1.00.")
+        return value
+
+    @field_validator("stake")
+    @classmethod
+    def validate_parlay_stake(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("Enter a stake greater than $0 to track a parlay.")
+        return value
+
+    @field_validator("profit_boost_pct")
+    @classmethod
+    def validate_parlay_boost(cls, value: float) -> float:
+        if value < 0:
+            raise ValueError("Profit boost cannot be negative.")
+        return value
+
+    @field_validator("actual_total_return")
+    @classmethod
+    def validate_actual_total_return(cls, value: float | None) -> float | None:
+        if value is not None and value < 0:
+            raise ValueError("Actual boosted return cannot be negative.")
+        return value
+
+
+class TrackedParlaySettleRequest(BaseModel):
+    status: Literal["won", "lost", "cashed_out", "cancelled", "push_adjusted", "void_adjusted"]
+    settlement_amount: float | None = None
+
+    @field_validator("settlement_amount")
+    @classmethod
+    def validate_parlay_settlement_amount(cls, value: float | None) -> float | None:
+        if value is not None and value < 0:
+            raise ValueError("Actual amount paid cannot be negative.")
+        return value
+
+
+class TrackedParlayUpdateRequest(BaseModel):
+    bet_type: Literal["cash", "bonus"]
+    stake: float
+    original_decimal_odds: float
+    effective_decimal_odds: float
+    profit_boost_pct: float = 0
+    actual_total_return: float | None = None
+    status: Literal["pending", "won", "lost", "cashed_out", "cancelled", "push_adjusted", "void_adjusted"]
+    settlement_amount: float | None = None
+
+    @field_validator("stake")
+    @classmethod
+    def validate_updated_parlay_stake(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("Enter a stake greater than $0.")
+        return value
+
+    @field_validator("original_decimal_odds", "effective_decimal_odds")
+    @classmethod
+    def validate_updated_parlay_odds(cls, value: float) -> float:
+        if value <= 1:
+            raise ValueError("Decimal odds must be above 1.00.")
+        return value
+
+    @field_validator("profit_boost_pct")
+    @classmethod
+    def validate_updated_parlay_boost(cls, value: float) -> float:
+        if value < 0:
+            raise ValueError("Profit boost cannot be negative.")
+        return value
+
+    @field_validator("actual_total_return", "settlement_amount")
+    @classmethod
+    def validate_updated_parlay_amounts(cls, value: float | None) -> float | None:
+        if value is not None and value < 0:
+            raise ValueError("Amounts cannot be negative.")
         return value
 
 
@@ -629,6 +742,38 @@ def list_tracked_bets(include_pending: bool = True) -> dict[str, Any]:
     return {"bets": bet_tracker_store.list(), "summary": bet_tracker_store.summary(include_pending=include_pending)}
 
 
+@router.get("/tracker/overall-summary")
+def tracker_overall_summary(include_pending: bool = True, include_parlays: bool = True) -> dict[str, Any]:
+    """Return a combined performance roll-up without mixing the two ledgers' rows."""
+    straight = bet_tracker_store.summary(include_pending=include_pending)
+    parlay = parlay_tracker_store.summary(include_pending=include_pending)
+    included_parlay = parlay if include_parlays else {
+        "pending": 0,
+        "cash_profit": 0.0,
+        "bonus_profit": 0.0,
+        "total_profit": 0.0,
+        "cash_wagered": 0.0,
+        "bonus_value_used": 0.0,
+        "cash_staked": 0.0,
+    }
+    cash_staked = round(float(straight["cash_staked"]) + float(included_parlay.get("cash_staked", 0)), 2)
+    cash_profit = round(float(straight["cash_profit"]) + float(included_parlay["cash_profit"]), 2)
+    bonus_profit = round(float(straight["bonus_profit"]) + float(included_parlay["bonus_profit"]), 2)
+    total_profit = round(cash_profit + bonus_profit, 2)
+    return {
+        "include_parlays": include_parlays,
+        "summary": {
+            "pending": int(straight["pending"]) + int(included_parlay["pending"]),
+            "cash_profit": cash_profit,
+            "bonus_profit": bonus_profit,
+            "total_profit": total_profit,
+            "cash_wagered": round(float(straight["cash_wagered"]) + float(included_parlay["cash_wagered"]), 2),
+            "bonus_value_used": round(float(straight["bonus_stake_used"]) + float(included_parlay["bonus_value_used"]), 2),
+            "total_roi_on_cash_risk_pct": round(total_profit / cash_staked * 100, 2) if cash_staked else None,
+        },
+    }
+
+
 @router.post("/tracker/results/preview")
 def preview_tracked_bet_results() -> dict[str, Any]:
     """Check final stats and return suggestions without changing any tracked bet."""
@@ -727,6 +872,68 @@ def settle_tracked_bet(bet_id: str, payload: TrackedBetSettleRequest) -> dict[st
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"success": True, "bet": bet, "summary": bet_tracker_store.summary()}
+
+
+@router.get("/tracker/parlays")
+def list_tracked_parlays(include_pending: bool = True) -> dict[str, Any]:
+    return {"parlays": parlay_tracker_store.list(), "summary": parlay_tracker_store.summary(include_pending=include_pending)}
+
+
+@router.post("/tracker/parlays")
+def create_tracked_parlay(payload: TrackedParlayCreateRequest) -> dict[str, Any]:
+    winning_total_return = payload.actual_total_return if payload.actual_total_return is not None else round(payload.stake * payload.effective_decimal_odds, 2)
+    if winning_total_return < payload.stake:
+        raise HTTPException(status_code=400, detail="Winning total return cannot be less than the stake.")
+    parlay = parlay_tracker_store.create(
+        {
+            **payload.model_dump(),
+            "winning_total_return": round(winning_total_return, 2),
+            "entry_origin": "parlay_evaluator",
+        }
+    )
+    return {"success": True, "parlay": parlay, "summary": parlay_tracker_store.summary()}
+
+
+@router.post("/tracker/parlays/{parlay_id}/settle")
+def settle_tracked_parlay(parlay_id: str, payload: TrackedParlaySettleRequest) -> dict[str, Any]:
+    try:
+        parlay = parlay_tracker_store.settle(parlay_id, payload.status, payload.settlement_amount)
+    except TrackedParlayNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Tracked parlay not found.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"success": True, "parlay": parlay, "summary": parlay_tracker_store.summary()}
+
+
+@router.put("/tracker/parlays/{parlay_id}")
+def update_tracked_parlay(parlay_id: str, payload: TrackedParlayUpdateRequest) -> dict[str, Any]:
+    winning_total_return = payload.actual_total_return if payload.actual_total_return is not None else round(payload.stake * payload.effective_decimal_odds, 2)
+    if winning_total_return < payload.stake:
+        raise HTTPException(status_code=400, detail="Winning total return cannot be less than the stake.")
+    if payload.status in {"cashed_out", "push_adjusted", "void_adjusted"} and payload.settlement_amount is None:
+        raise HTTPException(status_code=400, detail="Enter the actual amount paid by Bet365 for this outcome.")
+    try:
+        parlay = parlay_tracker_store.update(
+            parlay_id,
+            {
+                **payload.model_dump(),
+                "winning_total_return": round(winning_total_return, 2),
+            },
+        )
+    except TrackedParlayNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Tracked parlay not found.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"success": True, "parlay": parlay, "summary": parlay_tracker_store.summary()}
+
+
+@router.delete("/tracker/parlays/{parlay_id}")
+def delete_tracked_parlay(parlay_id: str) -> dict[str, Any]:
+    try:
+        parlay_tracker_store.delete(parlay_id)
+    except TrackedParlayNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Tracked parlay not found.") from exc
+    return {"success": True, "summary": parlay_tracker_store.summary()}
 
 
 @router.post("/settings")
