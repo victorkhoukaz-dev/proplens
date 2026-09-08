@@ -201,11 +201,13 @@ Status: next practical product work. Complete this before returning to automatic
 
 ### Phase 4A — Manual tracking entry
 
-- Add a fast **Track manual bet** path for player props without projections, defensive props, and game/other bets such as moneylines, spreads, totals, and custom bets.
-- Mark every record as **Evaluated** or **Manual** so tracking-only records are never treated as model-backed decisions in later research.
-- Allow free player entry, while suggesting imported-projection players when available; a separate player-directory import can be considered later if defensive-prop use makes it worthwhile.
-- Let eligible, precisely identified player-prop entries use a later result check; label all other manual records **Manual settlement required**.
-- Require the normal financial details and optionally capture team, opponent, position, market, side, line, season, and NFL week.
+- **Implemented, awaiting user testing:** add a fast **Track manual bet** path for player props without projections, defensive props, and game/other bets such as moneylines, spreads, totals, and custom bets.
+- Save an explicit **Manual** origin and blank model fields so tracking-only records are never treated as model-backed decisions in later research; newly saved evaluator bets receive an explicit **Evaluated** origin.
+- Allow free player entry while suggesting players from the active projection set; selecting one can fill its team, opponent, and position. A separate player-directory import can be considered later if defensive-prop use makes it worthwhile.
+- Keep Phase 4A manual entries on manual settlement for this first safe version. Precisely identified supported player props can be connected to result checks in a later extension after their identity and grading behavior are tested.
+- Reuse existing cash/bonus accounting, ROI, result correction, cash-out, cancellation, and deletion behavior.
+- Capture description/category, player and position where applicable, team, opponent, market, side, optional line, decimal odds, stake, cash/bonus type, and optional season plus NFL week.
+- Permit full correction of a manual entry through its own edit form while preserving the rule that it contains no model evaluation.
 
 ### Phase 4B — Unified overall activity view
 
@@ -262,9 +264,9 @@ Status: monitor and test opportunistically; do not make it the core workflow yet
 
 ## Current recommended order
 
-1. Test Phase 4B's optional unified activity view with both straight bets and parlays.
-2. Build Phase 4A manual tracking entry, including defensive and non-player bets, before requiring any separate player-directory import.
-3. Build Phase 4C NFL-week filters and weekly ROI after manual entries can provide season/week context.
+1. Test Phase 4A manual entry with one offensive/defensive player prop, one game bet, and one custom bet; verify editing, settlement, and combined ROI behavior.
+2. Build Phase 4C NFL-week filters and weekly ROI now that manual entries can provide season/week context.
+3. Reassess whether a separate all-player directory is useful after real defensive-prop usage.
 4. Return to Phase 3C.1 for cautious, confirm-only parlay result suggestions.
 5. Treat Phase 3D correlation and Phase 5 model improvement as later evidence-driven work.
 

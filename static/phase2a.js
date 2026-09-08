@@ -8,11 +8,11 @@
   const money = value => `$${Number(value || 0).toFixed(2)}`;
   const percent = value => value === null || value === undefined ? '—' : `${Number(value).toFixed(1)}%`;
   const toast = (message, error = false) => { const item = document.createElement('div'); item.className = `toast${error ? ' error' : ''}`; item.textContent = message; $('#toast-container').append(item); setTimeout(() => item.remove(), 4200); };
-  const marketLabel = market => ({ rushing_yards: 'Rushing yards', receiving_yards: 'Receiving yards', receptions: 'Receptions', anytime_td: 'Anytime TD' }[market] || String(market || '').replaceAll('_', ' '));
+  const marketLabel = market => ({ passing_yards: 'Passing yards', passing_tds: 'Passing TDs', passing_interceptions: 'Passing interceptions', rushing_yards: 'Rushing yards', receiving_yards: 'Receiving yards', receptions: 'Receptions', anytime_td: 'Anytime TD', tackles_assists: 'Tackles + assists', solo_tackles: 'Solo tackles', sacks: 'Sacks', defensive_interceptions: 'Defensive interceptions', passes_defended: 'Passes defended', defensive_td: 'Defensive TD', moneyline: 'Moneyline', spread: 'Spread', game_total: 'Game total', team_total: 'Team total', custom_player_prop: 'Other player prop', custom_game_bet: 'Other game bet', custom: 'Other / custom bet' }[market] || String(market || '').replaceAll('_', ' '));
   const statusLabel = bet => bet.status === 'cashed_out' ? `Cashed out · ${money(bet.settlement_amount)} received` : bet.status === 'cancelled' ? 'Cancelled before start' : bet.status[0].toUpperCase() + bet.status.slice(1);
   async function api(url, options) { const response = await fetch(url, options); const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data.detail || 'Something went wrong.'); return data; }
 
-  function activityForBet(bet) { return { ...bet, activity_type: 'straight', activity_search: `${bet.player_name} ${bet.market} ${bet.team || ''} ${bet.opponent || ''}`, activity_sort_name: bet.player_name }; }
+  function activityForBet(bet) { return { ...bet, activity_type: 'straight', activity_search: `${bet.description || ''} ${bet.player_name} ${bet.market} ${bet.category || ''} ${bet.position || ''} ${bet.team || ''} ${bet.opponent || ''}`, activity_sort_name: bet.description || bet.player_name }; }
   function activityForParlay(parlay) { return { ...parlay, activity_type: 'parlay', activity_search: parlay.legs.map(leg => `${leg.player_name} ${leg.market} ${leg.team || ''} ${leg.opponent || ''}`).join(' '), activity_sort_name: parlay.legs[0]?.player_name || 'Parlay' }; }
   function filteredActivity(activity) {
     const search = trackerSearch.value.trim().toLowerCase(), activityType = trackerActivityFilter.value, status = trackerStatusFilter.value, type = trackerTypeFilter.value;
@@ -42,16 +42,22 @@
   }
   function moreActions(bet, includeManualOutcomes = false) {
     const pendingActions = bet.status === 'pending' ? `${includeManualOutcomes ? `<button data-settle="won" data-bet-id="${bet.id}">Won</button><button data-settle="lost" data-bet-id="${bet.id}">Lost</button>` : ''}<button data-settle="push" data-bet-id="${bet.id}">Push</button><button data-cancel="${bet.id}">Cancel before start</button>` : '';
-    return `<details class="row-more"><summary aria-label="More actions for ${escapeHtml(bet.player_name)}">More</summary><div class="row-more-menu"><button data-edit="${bet.id}">Edit</button>${pendingActions}<button class="danger-action" data-delete="${bet.id}">Delete</button></div></details>`;
+    const editAttribute = bet.entry_origin === 'manual' ? `data-edit-manual="${bet.id}"` : `data-edit="${bet.id}"`;
+    return `<details class="row-more"><summary aria-label="More actions for ${escapeHtml(bet.player_name)}">More</summary><div class="row-more-menu"><button ${editAttribute}>Edit</button>${pendingActions}<button class="danger-action" data-delete="${bet.id}">Delete</button></div></details>`;
   }
   function rowMarkup(bet) {
-    const matchup = bet.team ? `${escapeHtml(bet.team)}${bet.opponent ? ` vs ${escapeHtml(bet.opponent)}` : ''}${bet.result_identity?.status === 'ready' ? ` · W${escapeHtml(bet.result_identity.week)}` : ''} · ` : '';
+    const week = bet.result_identity?.week;
+    const matchup = bet.team ? `${escapeHtml(bet.team)}${bet.opponent ? ` vs ${escapeHtml(bet.opponent)}` : ''}${week ? ` · W${escapeHtml(week)}` : ''} · ` : (week ? `W${escapeHtml(week)} · ` : '');
     const profit = Number(bet.profit || 0), settled = bet.status !== 'pending';
     const suggestion = resultSuggestionFor(bet);
     const canConfirm = bet.status === 'pending' && suggestion?.status === 'proposal';
     const actions = bet.status === 'pending' ? (canConfirm ? `<button class="settle-win confirm-result" data-confirm-preview="${bet.id}" data-proposed-result="${suggestion.proposed_result}">Confirm ${suggestion.proposed_result[0].toUpperCase() + suggestion.proposed_result.slice(1)}</button><button data-cashout="${bet.id}">Cash out</button>${moreActions(bet, true)}` : `<button class="settle-win" data-settle="won" data-bet-id="${bet.id}">Won</button><button data-settle="lost" data-bet-id="${bet.id}">Lost</button><button data-cashout="${bet.id}">Cash out</button>${moreActions(bet)}`) : moreActions(bet);
     const evidence = trackerIncludeParlays.checked ? '' : confirmedEvidenceMarkup(bet);
-    return `<article class="tracked-bet ${bet.status === 'pending' ? 'is-pending' : 'is-settled'}"><div class="bet-identity"><strong>${escapeHtml(bet.player_name)}</strong><span class="bet-prop">${escapeHtml(bet.side_label)} ${bet.line} · ${marketLabel(bet.market)}</span><small>${matchup}${Number(bet.decimal_odds).toFixed(2)} · ${bet.bet_type === 'bonus' ? 'Bonus' : 'Cash'} · ${money(bet.stake)}</small></div><div class="bet-status ${bet.status}"><span>${statusLabel(bet)}</span>${inlineSuggestionMarkup(bet)}${evidence}${settled ? `<strong class="${profit >= 0 ? 'positive' : 'negative'}">${profit >= 0 ? '+' : ''}${money(profit)}</strong>` : ''}</div><div class="settle-actions">${actions}</div></article>`;
+    const title = bet.entry_origin === 'manual' ? bet.description || bet.player_name : bet.player_name;
+    const selection = [bet.side_label, bet.line ?? ''].filter(value => value !== '').join(' ');
+    const prop = [selection, marketLabel(bet.market)].filter(Boolean).join(' · ');
+    const origin = bet.entry_origin === 'manual' ? '<span class="manual-entry-tag">Manual</span>' : '<span class="evaluated-entry-tag">Evaluated</span>';
+    return `<article class="tracked-bet ${bet.status === 'pending' ? 'is-pending' : 'is-settled'}"><div class="bet-identity">${origin}<strong>${escapeHtml(title)}</strong><span class="bet-prop">${escapeHtml(prop)}</span><small>${matchup}${Number(bet.decimal_odds).toFixed(2)} · ${bet.bet_type === 'bonus' ? 'Bonus' : 'Cash'} · ${money(bet.stake)}</small></div><div class="bet-status ${bet.status}"><span>${statusLabel(bet)}</span>${inlineSuggestionMarkup(bet)}${evidence}${settled ? `<strong class="${profit >= 0 ? 'positive' : 'negative'}">${profit >= 0 ? '+' : ''}${money(profit)}</strong>` : ''}</div><div class="settle-actions">${actions}</div></article>`;
   }
   function parlayRowMarkup(parlay) {
     const settled = parlay.status !== 'pending', profit = Number(parlay.profit || 0), legSummary = parlay.legs.map(leg => `${leg.player_name} ${leg.side_label} ${leg.line}`).join(' · ');
@@ -82,10 +88,11 @@
   }
   function previewMarkup(item) {
     const proposed = item.status === 'proposal' ? item.proposed_result : null;
-    const outcome = proposed ? proposed[0].toUpperCase() + proposed.slice(1) : item.status === 'game_not_final' || item.status === 'stats_unavailable' ? 'Waiting for stats' : item.status === 'source_error' ? 'Try again later' : 'Needs review';
+    const outcome = proposed ? proposed[0].toUpperCase() + proposed.slice(1) : item.status === 'manual_required' ? 'Manual settlement' : item.status === 'game_not_final' || item.status === 'stats_unavailable' ? 'Waiting for stats' : item.status === 'source_error' ? 'Try again later' : 'Needs review';
     const actual = item.status === 'proposal' ? `Actual: ${item.actual_stat} ${escapeHtml(item.stat_label)}` : escapeHtml(item.message);
     const outcomeClass = proposed || (item.status === 'game_not_final' || item.status === 'stats_unavailable' ? 'waiting' : 'review');
-    return `<div class="result-preview-row"><div><strong>${escapeHtml(item.player_name)} · ${escapeHtml(marketLabel(item.market))} ${item.line}</strong><small>${actual}</small></div><span class="result-preview-outcome ${outcomeClass}">${outcome}</span></div>`;
+    const line = item.line === null || item.line === undefined ? '' : ` ${item.line}`;
+    return `<div class="result-preview-row"><div><strong>${escapeHtml(item.player_name)} · ${escapeHtml(marketLabel(item.market))}${line}</strong><small>${actual}</small></div><span class="result-preview-outcome ${outcomeClass}">${outcome}</span></div>`;
   }
   function renderResultPreview(data) {
     latestResultPreview = data;
@@ -127,6 +134,7 @@
     render({ ...trackerData, parlays: parlayData.parlays }, overallData.summary);
     renderOverall(overallData);
   }
+  window.proplensRefreshTracker = loadTracker;
   const findBet = id => (window.proplensTrackedBets || []).find(bet => bet.id === id);
   const refreshVisibleTracker = () => { if (latestTrackerData) render(latestTrackerData); };
   $('#btn-open-tracker').addEventListener('click', async () => { trackerModal.hidden = false; try { await loadTracker(); } catch (error) { toast(error.message, true); } });
@@ -141,6 +149,7 @@
   $('#btn-save-tracked-bet').addEventListener('click', async event => { const evaluation = window.proplensLatestEvaluation, amount = Number(stake.value); if (!evaluation || !amount || amount <= 0) return toast('Enter the actual stake or bonus-bet value.', true); const button = event.currentTarget; button.disabled = true; try { const { prop, projection, model, value } = evaluation; await api('/api/tracker/bets', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ player_name: prop.player_name, team: prop.team, opponent: prop.opponent, market: prop.market, side_label: prop.side_label, line: prop.line, decimal_odds: prop.bet365_decimal, stake: amount, bet_type: betType.value, projection_mean: projection.mean, model_win_probability: model.win_probability, model_fair_decimal: model.fair_decimal, expected_value_pct: value.expected_value_pct, result_identity: evaluation.result_identity }) }); saveModal.hidden = true; toast('Saved as a pending bet.'); } catch (error) { toast(error.message, true); } finally { button.disabled = false; } });
   trackerList.addEventListener('click', async event => {
     const button = event.target.closest('button'); if (!button) return;
+    if (button.dataset.editManual) return;
     if (button.dataset.openParlayTracker) { $('#btn-open-parlay-tracker').click(); return; }
     if (button.dataset.edit) { selectedBet = findBet(button.dataset.edit); if (!selectedBet) return; $('#edit-bet-summary').textContent = `${selectedBet.player_name} ${selectedBet.side_label} ${selectedBet.line}`; $('#edit-bet-type').value = selectedBet.bet_type; $('#edit-bet-stake').value = selectedBet.stake; $('#edit-bet-line').value = selectedBet.line; $('#edit-bet-odds').value = selectedBet.decimal_odds; $('#edit-bet-status').value = selectedBet.status; $('#edit-settlement-amount').value = selectedBet.settlement_amount ?? ''; editModal.hidden = false; return; }
     if (button.dataset.cashout) { selectedBet = findBet(button.dataset.cashout); if (!selectedBet) return; $('#cashout-summary').textContent = `${selectedBet.player_name} ${selectedBet.side_label} ${selectedBet.line} · stake ${money(selectedBet.stake)}`; $('#cashout-amount').value = ''; cashoutModal.hidden = false; return; }

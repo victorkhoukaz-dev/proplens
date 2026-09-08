@@ -177,6 +177,76 @@ class TrackedBetCreateRequest(BaseModel):
         return value
 
 
+class ManualTrackedBetRequest(BaseModel):
+    """A tracking-only wager that has no model evaluation attached to it."""
+
+    category: Literal["player_prop", "game_bet", "custom"]
+    description: str
+    player_name: str | None = None
+    position: str | None = None
+    team: str | None = None
+    opponent: str | None = None
+    market: str
+    side_label: str | None = None
+    line: float | None = None
+    decimal_odds: float
+    stake: float
+    bet_type: Literal["cash", "bonus"]
+    season: int | None = None
+    week: int | None = None
+    status: Literal["pending", "won", "lost", "push", "cashed_out", "cancelled"] = "pending"
+    settlement_amount: float | None = None
+
+    @field_validator("description", "market")
+    @classmethod
+    def validate_manual_text(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Enter a short bet description and choose a market.")
+        return cleaned
+
+    @field_validator("player_name", "position", "team", "opponent", "side_label")
+    @classmethod
+    def clean_optional_manual_text(cls, value: str | None) -> str | None:
+        cleaned = value.strip() if isinstance(value, str) else None
+        return cleaned or None
+
+    @field_validator("stake")
+    @classmethod
+    def validate_manual_stake(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("Enter a stake greater than $0.")
+        return value
+
+    @field_validator("decimal_odds")
+    @classmethod
+    def validate_manual_odds(cls, value: float) -> float:
+        if value <= 1:
+            raise ValueError("Decimal odds must be above 1.00.")
+        return value
+
+    @field_validator("season")
+    @classmethod
+    def validate_manual_season(cls, value: int | None) -> int | None:
+        if value is not None and not 2020 <= value <= 2100:
+            raise ValueError("Season must be between 2020 and 2100.")
+        return value
+
+    @field_validator("week")
+    @classmethod
+    def validate_manual_week(cls, value: int | None) -> int | None:
+        if value is not None and not 1 <= value <= 25:
+            raise ValueError("NFL week must be between 1 and 25.")
+        return value
+
+    @field_validator("settlement_amount")
+    @classmethod
+    def validate_manual_settlement(cls, value: float | None) -> float | None:
+        if value is not None and value < 0:
+            raise ValueError("Cash-out amount cannot be negative.")
+        return value
+
+
 class TrackedBetSettleRequest(BaseModel):
     status: Literal["won", "lost", "push", "cashed_out", "cancelled"]
     settlement_amount: float | None = None
@@ -437,6 +507,59 @@ def _result_identity_for_tracked_bet(
         "nflverse_game_id": None,
         "espn_event_id": None,
         "scheduled_kickoff": None,
+    }
+
+
+def _manual_bet_record(payload: ManualTrackedBetRequest) -> dict[str, Any]:
+    """Create a ledger-compatible manual record without inventing model evidence."""
+    if payload.category == "player_prop" and not payload.player_name:
+        raise HTTPException(status_code=400, detail="Enter the player name for a player prop.")
+    if (payload.season is None) != (payload.week is None):
+        raise HTTPException(status_code=400, detail="Enter both season and NFL week, or leave both blank.")
+    if payload.status == "cashed_out" and payload.settlement_amount is None:
+        raise HTTPException(status_code=400, detail="Enter the actual cash-out amount.")
+
+    team = TeamNormalizer.canonical_team(payload.team) if payload.team else ""
+    opponent = TeamNormalizer.canonical_team(payload.opponent) if payload.opponent else ""
+    display_name = payload.player_name or payload.description
+    return {
+        "entry_origin": "manual",
+        "category": payload.category,
+        "description": payload.description,
+        "player_name": display_name,
+        "position": payload.position,
+        "team": team or None,
+        "opponent": opponent or None,
+        "market": payload.market,
+        "side_label": payload.side_label or "",
+        "line": payload.line,
+        "decimal_odds": payload.decimal_odds,
+        "stake": payload.stake,
+        "bet_type": payload.bet_type,
+        "projection_mean": None,
+        "model_win_probability": None,
+        "model_fair_decimal": None,
+        "expected_value_pct": None,
+        "source_context": None,
+        "result_identity": {
+            "version": 1,
+            "status": "manual_required",
+            "reason": "Tracking-only entry. Settle this wager manually.",
+            "season": payload.season,
+            "week": payload.week,
+            "player_name": payload.player_name,
+            "player_key": PlayerNameNormalizer.clean_name(payload.player_name) if payload.player_name else None,
+            "team": team or None,
+            "opponent": opponent or None,
+            "matchup_key": "|".join(sorted((team, opponent))) if team and opponent else None,
+            "position": payload.position,
+            "projection_source": None,
+            "projection_snapshot_id": None,
+            "projection_snapshot_label": None,
+            "nflverse_game_id": None,
+            "espn_event_id": None,
+            "scheduled_kickoff": None,
+        },
     }
 
 
@@ -834,10 +957,44 @@ def create_tracked_bet(payload: TrackedBetCreateRequest) -> dict[str, Any]:
     bet = bet_tracker_store.create(
         {
             **payload.model_dump(exclude={"result_identity"}),
+            "entry_origin": "evaluated",
             "source_context": source_context,
             "result_identity": _result_identity_for_tracked_bet(payload, source_context),
         }
     )
+    return {"success": True, "bet": bet, "summary": bet_tracker_store.summary()}
+
+
+@router.post("/tracker/bets/manual")
+def create_manual_tracked_bet(payload: ManualTrackedBetRequest) -> dict[str, Any]:
+    """Save a tracking-only straight wager; no projection or model result is inferred."""
+    record = _manual_bet_record(payload)
+    bet = bet_tracker_store.create(record)
+    if payload.status != "pending":
+        try:
+            bet = bet_tracker_store.settle(bet["id"], payload.status, payload.settlement_amount)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"success": True, "bet": bet, "summary": bet_tracker_store.summary()}
+
+
+@router.put("/tracker/bets/{bet_id}/manual")
+def update_manual_tracked_bet(bet_id: str, payload: ManualTrackedBetRequest) -> dict[str, Any]:
+    """Correct all details of a manual entry while keeping it tracking-only."""
+    existing = next((bet for bet in bet_tracker_store.list() if bet["id"] == bet_id), None)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Tracked bet not found.")
+    if existing.get("entry_origin") != "manual":
+        raise HTTPException(status_code=409, detail="Only a manual tracking entry can be edited here.")
+    try:
+        bet = bet_tracker_store.update(
+            bet_id,
+            {**_manual_bet_record(payload), "status": payload.status, "settlement_amount": payload.settlement_amount},
+        )
+    except TrackedBetNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Tracked bet not found.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"success": True, "bet": bet, "summary": bet_tracker_store.summary()}
 
 

@@ -101,6 +101,8 @@ class ResultPreviewService:
     def _proposal(bet: dict[str, Any], rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
         identity = _identity_ready(bet)
         base = {"bet_id": bet["id"], "player_name": bet["player_name"], "market": bet["market"], "line": bet["line"]}
+        if bet.get("entry_origin") == "manual":
+            return {**base, "status": "manual_required", "message": "Manual tracking entry. Confirm the result with Bet365 and settle it manually."}
         if not identity:
             return {**base, "status": "missing_context", "message": "Legacy bet: no reliable week, team, and opponent context was saved."}
         if bet["market"] not in SUPPORTED_MARKETS and bet["market"] != "anytime_td":
