@@ -17,6 +17,7 @@
     player_prop: [
       ['passing_yards', 'Passing yards'], ['passing_tds', 'Passing TDs'],
       ['passing_interceptions', 'Passing interceptions'], ['rushing_yards', 'Rushing yards'],
+      ['rushing_receiving_yards', 'Rushing + receiving yards'],
       ['receiving_yards', 'Receiving yards'], ['receptions', 'Receptions'],
       ['anytime_td', 'Anytime TD'], ['tackles_assists', 'Tackles + assists'],
       ['solo_tackles', 'Solo tackles'], ['sacks', 'Sacks'],
@@ -55,6 +56,12 @@
     playerFields.forEach(field => field.hidden = category.value !== 'player_prop');
     selectionFields.forEach(field => field.hidden = category.value === 'custom');
     if (!selected) $('#manual-side').value = category.value === 'game_bet' ? 'Home' : category.value === 'custom' ? 'Other' : 'Over';
+  }
+
+  function applyDefaultMarketForPosition() {
+    const defaults = { QB: 'passing_yards', RB: 'rushing_yards', WR: 'receiving_yards', TE: 'receiving_yards' };
+    const defaultMarket = defaults[$('#manual-position').value];
+    if (defaultMarket && [...market.options].some(option => option.value === defaultMarket)) market.value = defaultMarket;
   }
 
   function updateSettlementVisibility() {
@@ -128,6 +135,7 @@
     $('#manual-team').value = match.team || '';
     $('#manual-opponent').value = match.opponent || '';
     $('#manual-position').value = match.position || '';
+    applyDefaultMarketForPosition();
   }
 
   function openForEdit(bet) {
@@ -156,6 +164,7 @@
 
   $('#btn-manual-bet').addEventListener('click', () => { resetForm(); modal.hidden = false; searchPlayers(); });
   category.addEventListener('change', () => renderMarkets());
+  $('#manual-position').addEventListener('change', applyDefaultMarketForPosition);
   status.addEventListener('change', updateSettlementVisibility);
   $('#manual-player').addEventListener('input', () => {
     applyPlayerSuggestion();
