@@ -39,12 +39,17 @@ def _number(value: str | None) -> float | None:
 
 def _identity_ready(bet: dict[str, Any]) -> dict[str, Any] | None:
     identity = bet.get("result_identity")
-    if not isinstance(identity, dict) or identity.get("status") != "ready":
+    if not isinstance(identity, dict):
         return None
     season, week = identity.get("season"), identity.get("week")
     if not isinstance(season, int) or not isinstance(week, int):
         return None
     if not identity.get("player_key") or not identity.get("team") or not identity.get("opponent"):
+        return None
+    # Older manual records were saved before Phase 4F with manual_required even
+    # when the exact player/game identity was complete. Their stored data can be
+    # safely previewed if it meets the same strict requirements above.
+    if identity.get("status") not in {"ready", "manual_required"}:
         return None
     return identity
 
@@ -101,12 +106,18 @@ class ResultPreviewService:
     def _proposal(bet: dict[str, Any], rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
         identity = _identity_ready(bet)
         base = {"bet_id": bet["id"], "player_name": bet["player_name"], "market": bet["market"], "line": bet["line"]}
-        if bet.get("entry_origin") == "manual":
-            return {**base, "status": "manual_required", "message": "Manual tracking entry. Confirm the result with Bet365 and settle it manually."}
         if not identity:
+            if bet.get("entry_origin") == "manual":
+                return {**base, "status": "manual_required", "message": "Manual settlement required — add player, team, opponent, season, and NFL week before this bet can be checked."}
             return {**base, "status": "missing_context", "message": "Legacy bet: no reliable week, team, and opponent context was saved."}
         if bet["market"] not in SUPPORTED_MARKETS and bet["market"] != "anytime_td":
-            return {**base, "status": "unsupported_market", "message": "This market stays manual until its grading rules are tested."}
+            status = "manual_required" if bet.get("entry_origin") == "manual" else "unsupported_market"
+            return {**base, "status": status, "message": "Manual settlement required — this market is not in the tested final-stat preview yet." if status == "manual_required" else "This market stays manual until its grading rules are tested."}
+        side = str(bet.get("side_label", "")).casefold()
+        if bet["market"] == "anytime_td" and side != "yes":
+            return {**base, "status": "manual_required", "message": "Manual settlement required — only an Anytime TD Yes selection has a tested preview rule."}
+        if bet["market"] in SUPPORTED_MARKETS and (side not in {"over", "under"} or bet.get("line") is None):
+            return {**base, "status": "manual_required", "message": "Manual settlement required — this prop needs an Over/Under selection and an exact line."}
         week_rows = [row for row in rows if row["season"] == identity["season"] and row["week"] == identity["week"]]
         game_rows = [row for row in week_rows if {row["team"], row["opponent"]} == {identity["team"], identity["opponent"]}]
         if not game_rows:
@@ -134,7 +145,6 @@ class ResultPreviewService:
         if actual is None:
             return {**base, "status": "player_review", "message": "The matched player has no usable statistic for this market."}
         line = float(bet["line"])
-        side = str(bet.get("side_label", "")).casefold()
         proposed = "push" if actual == line else ("won" if (actual > line if side == "over" else actual < line) else "lost")
         return {
             **base,

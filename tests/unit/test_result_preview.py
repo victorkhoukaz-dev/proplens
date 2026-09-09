@@ -90,6 +90,36 @@ def test_preview_anytime_td_never_infers_a_loss_from_no_offensive_td(monkeypatch
     assert "Do not infer a loss" in proposal["message"]
 
 
+def test_preview_allows_a_fully_identified_manual_standard_prop(monkeypatch):
+    content = FIXTURE.read_text(encoding="utf-8")
+    monkeypatch.setattr(result_preview_service, "_season_content", lambda season, refresh: (content, "2025-09-08T12:00:00+00:00", False))
+    manual = {
+        **pending_bet(),
+        "entry_origin": "manual",
+        "result_identity": {**pending_bet()["result_identity"], "status": "manual_required"},
+    }
+
+    report = result_preview_service.preview([manual])
+
+    assert report["sources"][0]["season"] == 2025
+    assert report["proposals"][0]["status"] == "proposal"
+    assert report["proposals"][0]["proposed_result"] == "won"
+
+
+def test_preview_keeps_incomplete_manual_bets_on_manual_settlement():
+    manual = {
+        **pending_bet(opponent=""),
+        "entry_origin": "manual",
+        "result_identity": {**pending_bet(opponent="")["result_identity"], "status": "manual_required"},
+    }
+
+    report = result_preview_service.preview([manual], refresh=False)
+
+    assert report["sources"] == []
+    assert report["proposals"][0]["status"] == "manual_required"
+    assert "add player, team, opponent, season, and NFL week" in report["proposals"][0]["message"]
+
+
 def test_preview_translates_missing_season_file_into_waiting_for_stats(monkeypatch):
     monkeypatch.setattr(
         result_preview_service,

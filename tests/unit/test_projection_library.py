@@ -189,7 +189,7 @@ def test_manual_bet_can_receive_immutable_later_evaluation(client):
     saved = linked.json()["bet"]
     assert saved["entry_origin"] == "manual"
     assert saved["model_win_probability"] is None
-    assert saved["result_identity"]["status"] == "manual_required"
+    assert saved["result_identity"]["status"] == "ready"
     assert len(saved["later_evaluations"]) == 1
     snapshot = saved["later_evaluations"][0]
     assert snapshot["kind"] == "later_evaluation"

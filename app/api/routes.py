@@ -33,7 +33,7 @@ from app.db.projection_snapshot_store import (
 )
 from app.db.raw_odds_snapshot_store import raw_odds_snapshot_store
 from app.db.settings_store import settings_store
-from app.services.result_preview import result_preview_service
+from app.services.result_preview import SUPPORTED_MARKETS, result_preview_service
 from app.schemas.ev import MatchedEVOpportunity, PropBreakdown
 from app.schemas.projections import PlayerProjection, Position, StatCategory
 from app.schemas.odds import (
@@ -754,6 +754,26 @@ def _manual_bet_record(payload: ManualTrackedBetRequest) -> dict[str, Any]:
     team = TeamNormalizer.canonical_team(payload.team) if payload.team else ""
     opponent = TeamNormalizer.canonical_team(payload.opponent) if payload.opponent else ""
     display_name = payload.player_name or payload.description
+    # Manual bets remain model-free, but a fully identified standard player prop
+    # can safely participate in the same preview-only result check as an evaluated bet.
+    # It is never settled by this flag alone; the user still confirms a proposal.
+    preview_eligible = bool(
+        payload.category == "player_prop"
+        and payload.market in set(SUPPORTED_MARKETS) | {"anytime_td"}
+        and payload.player_name
+        and team
+        and opponent
+        and payload.season is not None
+        and payload.week is not None
+        and (
+            (payload.market == "anytime_td" and str(payload.side_label or "").casefold() == "yes")
+            or (
+                payload.market in SUPPORTED_MARKETS
+                and str(payload.side_label or "").casefold() in {"over", "under"}
+                and payload.line is not None
+            )
+        )
+    )
     return {
         "entry_origin": "manual",
         "category": payload.category,
@@ -775,8 +795,12 @@ def _manual_bet_record(payload: ManualTrackedBetRequest) -> dict[str, Any]:
         "source_context": None,
         "result_identity": {
             "version": 1,
-            "status": "manual_required",
-            "reason": "Tracking-only entry. Settle this wager manually.",
+            "status": "ready" if preview_eligible else "manual_required",
+            "reason": (
+                "Eligible for preview-only final-stat suggestions; confirm any proposal against Bet365 before settling."
+                if preview_eligible
+                else "Manual settlement required: add complete supported player-prop identity details to enable a preview."
+            ),
             "season": payload.season,
             "week": payload.week,
             "player_name": payload.player_name,

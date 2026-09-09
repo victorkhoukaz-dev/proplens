@@ -56,6 +56,26 @@ def test_manual_player_prop_is_saved_without_model_evidence(client):
     assert preview["proposals"][0]["status"] == "manual_required"
 
 
+def test_complete_supported_manual_player_prop_is_preview_eligible(client):
+    response = client.post(
+        "/api/tracker/bets/manual",
+        json=manual_payload(
+            player_name="Saquon Barkley",
+            position="RB",
+            team="PHI",
+            opponent="DAL",
+            market="rushing_yards",
+            side_label="Over",
+            line=55.0,
+            season=2025,
+            week=1,
+        ),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["bet"]["result_identity"]["status"] == "ready"
+
+
 def test_manual_game_bet_uses_existing_roi_and_settlement_rules(client):
     created = client.post(
         "/api/tracker/bets/manual",
