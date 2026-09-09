@@ -149,6 +149,90 @@ def test_saved_evaluation_captures_result_match_identity(client):
     assert stored_identity["projection_snapshot_label"] == "Week 1 result-check test"
 
 
+def test_manual_bet_can_receive_immutable_later_evaluation(client):
+    imported = client.post(
+        "/api/upload/paste",
+        json={
+            "data_type": "projections",
+            "content": projection_text(70.5),
+            "season": 2026,
+            "week": 1,
+            "label": "Saturday projections",
+        },
+    )
+    assert imported.status_code == 200
+    manual = client.post(
+        "/api/tracker/bets/manual",
+        json={
+            "category": "player_prop",
+            "description": "Saquon Barkley Over 70 rushing yards",
+            "player_name": "saquon barkley",
+            "position": "RB",
+            "team": "PHI",
+            "opponent": "DAL",
+            "market": "rushing_yards",
+            "side_label": "Over",
+            "line": 70,
+            "decimal_odds": 1.9,
+            "stake": 5,
+            "bet_type": "cash",
+            "season": 2026,
+            "week": 1,
+        },
+    ).json()["bet"]
+
+    linked = client.post(
+        f"/api/tracker/bets/{manual['id']}/later-evaluation",
+        json={"player_name": "Saquon Barkley"},
+    )
+    assert linked.status_code == 200
+    saved = linked.json()["bet"]
+    assert saved["entry_origin"] == "manual"
+    assert saved["model_win_probability"] is None
+    assert saved["result_identity"]["status"] == "manual_required"
+    assert len(saved["later_evaluations"]) == 1
+    snapshot = saved["later_evaluations"][0]
+    assert snapshot["kind"] == "later_evaluation"
+    assert snapshot["projection_snapshot_label"] == "Saturday projections"
+    assert snapshot["projection"]["mean"] == 70.5
+    assert snapshot["prop"]["line"] == 70
+    assert snapshot["prop"]["bet365_decimal"] == 1.9
+
+    updated_import = client.post(
+        "/api/upload/paste",
+        json={
+            "data_type": "projections",
+            "content": projection_text(64.0),
+            "season": 2026,
+            "week": 1,
+            "label": "Sunday update",
+        },
+    )
+    assert updated_import.status_code == 200
+    reloaded = client.get("/api/tracker/bets").json()["bets"][0]
+    assert reloaded["later_evaluations"][0]["projection"]["mean"] == 70.5
+    assert reloaded["later_evaluations"][0]["projection_snapshot_label"] == "Saturday projections"
+
+
+def test_later_evaluation_rejects_projection_from_a_different_saved_week(client):
+    client.post(
+        "/api/upload/paste",
+        json={"data_type": "projections", "content": projection_text(70.5), "season": 2026, "week": 2},
+    )
+    manual = client.post(
+        "/api/tracker/bets/manual",
+        json={
+            "category": "player_prop", "description": "Saquon Barkley Over 70", "player_name": "Saquon Barkley",
+            "team": "PHI", "opponent": "DAL", "market": "rushing_yards", "side_label": "Over",
+            "line": 70, "decimal_odds": 1.9, "stake": 5, "bet_type": "cash", "season": 2026, "week": 1,
+        },
+    ).json()["bet"]
+
+    response = client.post(f"/api/tracker/bets/{manual['id']}/later-evaluation", json={"player_name": "Saquon Barkley"})
+    assert response.status_code == 409
+    assert "different NFL week" in response.json()["detail"]
+
+
 def test_active_snapshot_cannot_be_deleted_and_inactive_snapshot_can(client):
     first = client.post(
         "/api/upload/paste",

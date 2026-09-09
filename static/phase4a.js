@@ -118,6 +118,8 @@
     renderMarkets();
     updateSettlementVisibility();
     applyWeekSuggestion();
+    $('#manual-player-source').textContent = '';
+    $('#manual-player-source').classList.remove('directory');
     $('#manual-bet-title').textContent = 'Track a manual bet';
     $('#btn-save-manual-bet').textContent = 'Save manual bet';
   }
@@ -153,9 +155,17 @@
   async function searchPlayers() {
     const query = value('#manual-player');
     try {
-      const data = await api(`/api/evaluator/players?q=${encodeURIComponent(query)}&limit=20`);
-      playerMatches = data.players || [];
-      $('#manual-player-options').innerHTML = playerMatches.map(player => `<option value="${player.player_name}">${player.team} · ${player.position}</option>`).join('');
+      const [projectionData, directoryData] = await Promise.all([
+        api(`/api/evaluator/players?q=${encodeURIComponent(query)}&limit=20`),
+        api(`/api/player-directory/search?q=${encodeURIComponent(query)}&limit=20`),
+      ]);
+      const projectionPlayers = (projectionData.players || []).map(player => ({ ...player, source: 'projection' }));
+      const projectionKeys = new Set(projectionPlayers.map(player => `${String(player.player_name).toLowerCase()}|${player.team}`));
+      const directoryPlayers = (directoryData.players || [])
+        .filter(player => !projectionKeys.has(`${String(player.player_name).toLowerCase()}|${player.team}`))
+        .map(player => ({ ...player, source: 'directory', markets: [] }));
+      playerMatches = [...projectionPlayers, ...directoryPlayers];
+      $('#manual-player-options').innerHTML = playerMatches.map(player => `<option value="${player.player_name}">${player.team} · ${player.position} · ${player.source === 'projection' ? 'Active projection' : 'Player directory — no projection'}</option>`).join('');
       applyPlayerSuggestion();
     } catch (_) {
       playerMatches = [];
@@ -165,11 +175,15 @@
   function applyPlayerSuggestion() {
     const typed = value('#manual-player').toLowerCase();
     const match = playerMatches.find(player => player.player_name.toLowerCase() === typed);
-    if (!match) return;
+    const source = $('#manual-player-source');
+    if (!match) { source.textContent = ''; source.classList.remove('directory'); return; }
     $('#manual-team').value = match.team || '';
-    $('#manual-opponent').value = match.opponent || '';
-    $('#manual-position').value = match.position || '';
+    if (match.source === 'projection') $('#manual-opponent').value = match.opponent || '';
+    const positionOption = [...$('#manual-position').options].find(option => option.value === match.position);
+    $('#manual-position').value = positionOption ? match.position : 'Other';
     applyDefaultMarketForPosition();
+    source.textContent = match.source === 'projection' ? 'Active projection match — use the evaluator when you are ready.' : 'Player directory — no projection loaded. This remains a tracking-only manual bet.';
+    source.classList.toggle('directory', match.source === 'directory');
   }
 
   function openForEdit(bet) {
@@ -185,6 +199,8 @@
     $('#manual-opponent').value = bet.opponent || '';
     $('#manual-season').value = bet.result_identity?.season ?? '';
     $('#manual-week').value = bet.result_identity?.week ?? '';
+    $('#manual-player-source').textContent = '';
+    $('#manual-player-source').classList.remove('directory');
     weekHelp.textContent = bet.result_identity?.week ? `Saved Week ${bet.result_identity.week}. Editing does not change it automatically.` : 'No NFL week was saved for this record.';
     $('#manual-odds').value = bet.decimal_odds;
     $('#manual-stake').value = bet.stake;

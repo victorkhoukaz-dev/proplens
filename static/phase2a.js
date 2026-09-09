@@ -1,9 +1,9 @@
 /* Phase 2A: local straight-bet tracker with compact ledger controls. */
 (() => {
   const $ = selector => document.querySelector(selector);
-  const trackerModal = $('#tracker-modal'), saveModal = $('#save-bet-modal'), editModal = $('#edit-bet-modal'), cashoutModal = $('#cashout-modal');
+  const trackerModal = $('#tracker-modal'), saveModal = $('#save-bet-modal'), editModal = $('#edit-bet-modal'), cashoutModal = $('#cashout-modal'), laterEvaluationModal = $('#later-evaluation-modal'), laterEvaluationHistoryModal = $('#later-evaluation-history-modal');
   const trackerList = $('#tracker-list'), trackerSummary = $('#tracker-summary'), trackerIncludePending = $('#tracker-include-pending'), trackerIncludeParlays = $('#tracker-include-parlays'), trackerSearch = $('#tracker-search'), trackerSeasonFilter = $('#tracker-season-filter'), trackerWeekFilter = $('#tracker-week-filter'), trackerActivityFilter = $('#tracker-activity-filter'), trackerStatusFilter = $('#tracker-status-filter'), trackerTypeFilter = $('#tracker-type-filter'), trackerSort = $('#tracker-sort'), trackerVisibleCount = $('#tracker-visible-count'), trackerReportContext = $('#tracker-report-context'), betType = $('#tracker-bet-type'), stake = $('#tracker-stake'), bonusHelp = $('#tracker-bonus-help'), checkResults = $('#btn-check-results'), resultPreview = $('#result-preview'), resultPreviewSummary = $('#result-preview-summary'), resultPreviewList = $('#result-preview-list'), toggleResultPreview = $('#btn-toggle-result-preview'), suggestionsOnly = $('#btn-suggestions-only');
-  let selectedBet = null, latestTrackerData = null, latestOverallSummary = null, latestResultPreview = null, showingSuggestionsOnly = false;
+  let selectedBet = null, selectedLaterEvaluationBet = null, laterEvaluationPlayers = [], latestTrackerData = null, latestOverallSummary = null, latestResultPreview = null, showingSuggestionsOnly = false;
   const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
   const money = value => `$${Number(value || 0).toFixed(2)}`;
   const percent = value => value === null || value === undefined ? '—' : `${Number(value).toFixed(1)}%`;
@@ -90,8 +90,11 @@
   }
   function moreActions(bet, includeManualOutcomes = false) {
     const pendingActions = bet.status === 'pending' ? `${includeManualOutcomes ? `<button data-settle="won" data-bet-id="${bet.id}">Won</button><button data-settle="lost" data-bet-id="${bet.id}">Lost</button>` : ''}<button data-settle="push" data-bet-id="${bet.id}">Push</button><button data-cancel="${bet.id}">Cancel before start</button>` : '';
+    const laterEvaluations = bet.later_evaluations || [];
+    const laterEvaluationAction = bet.entry_origin === 'manual' && bet.category === 'player_prop' ? `<button data-later-evaluate="${bet.id}">${laterEvaluations.length ? 'Evaluate again' : 'Evaluate with projections'}</button>` : '';
+    const laterHistoryAction = laterEvaluations.length ? `<button data-view-later-evaluations="${bet.id}">View later evaluation${laterEvaluations.length === 1 ? '' : 's'}</button>` : '';
     const editAttribute = bet.entry_origin === 'manual' ? `data-edit-manual="${bet.id}"` : `data-edit="${bet.id}"`;
-    return `<details class="row-more"><summary aria-label="More actions for ${escapeHtml(bet.player_name)}">More</summary><div class="row-more-menu"><button ${editAttribute}>Edit</button>${pendingActions}<button class="danger-action" data-delete="${bet.id}">Delete</button></div></details>`;
+    return `<details class="row-more"><summary aria-label="More actions for ${escapeHtml(bet.player_name)}">More</summary><div class="row-more-menu"><button ${editAttribute}>Edit</button>${laterEvaluationAction}${laterHistoryAction}${pendingActions}<button class="danger-action" data-delete="${bet.id}">Delete</button></div></details>`;
   }
   function rowMarkup(bet) {
     const week = bet.result_identity?.week;
@@ -104,7 +107,7 @@
     const title = bet.entry_origin === 'manual' ? bet.description || bet.player_name : bet.player_name;
     const selection = [bet.side_label, bet.line ?? ''].filter(value => value !== '').join(' ');
     const prop = [selection, marketLabel(bet.market)].filter(Boolean).join(' · ');
-    const origin = bet.entry_origin === 'manual' ? '<span class="manual-entry-tag">Manual</span>' : '<span class="evaluated-entry-tag">Evaluated</span>';
+    const origin = bet.entry_origin === 'manual' ? `<span class="manual-entry-tag">Manual</span>${(bet.later_evaluations || []).length ? '<span class="later-evaluation-tag" title="Placed manually and evaluated later with imported projections">Later evaluated</span>' : ''}` : '<span class="evaluated-entry-tag">Evaluated</span>';
     return `<article class="tracked-bet ${bet.status === 'pending' ? 'is-pending' : 'is-settled'}"><div class="bet-identity">${origin}<strong>${escapeHtml(title)}</strong><span class="bet-prop">${escapeHtml(prop)}</span><small>${matchup}${Number(bet.decimal_odds).toFixed(2)} · ${bet.bet_type === 'bonus' ? 'Bonus' : 'Cash'} · ${money(bet.stake)}</small></div><div class="bet-status ${bet.status}"><span>${statusLabel(bet)}</span>${inlineSuggestionMarkup(bet)}${evidence}${settled ? `<strong class="${profit >= 0 ? 'positive' : 'negative'}">${profit >= 0 ? '+' : ''}${money(profit)}</strong>` : ''}</div><div class="settle-actions">${actions}</div></article>`;
   }
   function parlayRowMarkup(parlay) {
@@ -188,6 +191,35 @@
   }
   window.proplensRefreshTracker = loadTracker;
   const findBet = id => (window.proplensTrackedBets || []).find(bet => bet.id === id);
+  const supportedLaterEvaluationMarkets = new Set(['passing_yards', 'passing_tds', 'passing_interceptions', 'rushing_yards', 'receiving_yards', 'receptions', 'anytime_td']);
+  const normalizeName = value => String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  async function openLaterEvaluation(bet) {
+    if (!supportedLaterEvaluationMarkets.has(bet.market)) return toast('This manual market is not available in the projection evaluator yet.', true);
+    if (!['over', 'under', 'yes'].includes(String(bet.side_label || '').toLowerCase()) || !Number.isFinite(Number(bet.line)) || !Number.isFinite(Number(bet.decimal_odds))) return toast('This manual bet needs an Over, Under, or Yes selection, an exact line, and decimal odds before it can be evaluated.', true);
+    const data = await api(`/api/evaluator/players?q=${encodeURIComponent(bet.player_name || '')}&limit=20`);
+    const exactName = normalizeName(bet.player_name);
+    laterEvaluationPlayers = (data.players || []).filter(player => player.markets?.includes(bet.market) && normalizeName(player.player_name) === exactName);
+    if (!laterEvaluationPlayers.length) return toast('No matching imported projection was found for this player and market. Import the correct projection set, or keep this bet track-only.', true);
+    selectedLaterEvaluationBet = bet;
+    $('#later-evaluation-summary').textContent = `${bet.player_name} ${bet.side_label} ${bet.line} · ${marketLabel(bet.market)} · ${Number(bet.decimal_odds).toFixed(2)} · ${money(bet.stake)}.`;
+    $('#later-evaluation-player').innerHTML = laterEvaluationPlayers.map((player, index) => `<option value="${index}">${escapeHtml(player.player_name)} · ${escapeHtml(player.position)} · ${escapeHtml(player.team)} vs ${escapeHtml(player.opponent || '—')}</option>`).join('');
+    laterEvaluationModal.hidden = false;
+  }
+  function showLaterEvaluationHistory(bet) {
+    const snapshots = bet.later_evaluations || [];
+    if (!snapshots.length) return;
+    $('#later-evaluation-history-summary').textContent = `${bet.player_name} · placed manually, then evaluated ${snapshots.length} time${snapshots.length === 1 ? '' : 's'} after projections arrived.`;
+    $('#later-evaluation-history-list').innerHTML = snapshots.slice().reverse().map(snapshot => {
+      const when = snapshot.evaluated_at ? new Date(snapshot.evaluated_at).toLocaleString() : 'Saved earlier';
+      const projection = Number(snapshot.projection?.mean);
+      const probability = Number(snapshot.model?.win_probability);
+      const fairOdds = Number(snapshot.model?.fair_decimal);
+      const ev = Number(snapshot.value?.expected_value_pct);
+      const prop = snapshot.prop || {};
+      return `<article class="later-evaluation-history-item"><strong>${escapeHtml(snapshot.projection_snapshot_label || 'Imported projection set')}</strong><small>${escapeHtml(when)} · ${escapeHtml(prop.side_label || '')} ${escapeHtml(prop.line ?? '')} · ${escapeHtml(marketLabel(prop.market))}</small><div><span>Projection <b>${Number.isFinite(projection) ? projection.toFixed(1) : '—'}</b></span><span>Model win <b>${Number.isFinite(probability) ? percent(probability) : '—'}</b></span><span>Fair odds <b>${Number.isFinite(fairOdds) ? fairOdds.toFixed(2) : '—'}</b></span><span>EV <b class="${ev >= 0 ? 'positive' : 'negative'}">${Number.isFinite(ev) ? `${ev >= 0 ? '+' : ''}${ev.toFixed(2)}%` : '—'}</b></span></div></article>`;
+    }).join('');
+    laterEvaluationHistoryModal.hidden = false;
+  }
   const refreshVisibleTracker = () => { if (latestTrackerData) render(latestTrackerData); };
   $('#btn-open-tracker').addEventListener('click', async () => { trackerModal.hidden = false; try { await loadTracker(); } catch (error) { toast(error.message, true); } });
   checkResults.addEventListener('click', async () => { checkResults.disabled = true; checkResults.textContent = 'Checking…'; try { const data = await api('/api/tracker/results/preview', { method: 'POST' }); renderResultPreview(data); refreshVisibleTracker(); toast(`Checked ${data.checked_pending} pending bet${data.checked_pending === 1 ? '' : 's'}. No results were changed.`); } catch (error) { toast(error.message, true); } finally { checkResults.disabled = false; checkResults.textContent = 'Check results'; } });
@@ -198,11 +230,31 @@
   trackerSeasonFilter.addEventListener('change', () => { trackerWeekFilter.value = 'all'; refreshVisibleTracker(); });
   trackerWeekFilter.addEventListener('change', refreshVisibleTracker);
   [trackerSearch, trackerActivityFilter, trackerStatusFilter, trackerTypeFilter, trackerSort].forEach(control => control.addEventListener('input', refreshVisibleTracker));
+  $('#btn-start-later-evaluation').addEventListener('click', () => {
+    const player = laterEvaluationPlayers[Number($('#later-evaluation-player').value)];
+    if (!selectedLaterEvaluationBet || !player) return toast('Choose the imported player before evaluating.', true);
+    window.proplensBeginLaterEvaluation?.(selectedLaterEvaluationBet, player);
+  });
+  document.addEventListener('click', async event => {
+    const button = event.target.closest('#btn-attach-later-evaluation');
+    if (!button) return;
+    const target = window.proplensLaterEvaluationTarget?.();
+    if (!target) return toast('Open this calculation from a manual tracked bet before attaching it.', true);
+    button.disabled = true;
+    try {
+      await api(`/api/tracker/bets/${target.betId}/later-evaluation`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ player_name: target.playerName }) });
+      window.proplensClearLaterEvaluationTarget?.();
+      await loadTracker();
+      toast('Later evaluation attached. The original wager remains a manual record.');
+    } catch (error) { toast(error.message, true); } finally { button.disabled = false; }
+  });
   document.addEventListener('click', event => { const button = event.target.closest('#btn-save-evaluation'); if (!button) return; const evaluation = window.proplensLatestEvaluation; if (!evaluation) return toast('Evaluate this prop before saving it.', true); $('#save-bet-summary').textContent = `${evaluation.prop.player_name} ${evaluation.prop.side_label} ${evaluation.prop.line} at ${Number(evaluation.prop.bet365_decimal).toFixed(2)}.`; stake.value = evaluation.value.entered_stake ?? 5; betType.value = 'cash'; bonusHelp.hidden = true; saveModal.hidden = false; });
   betType.addEventListener('change', () => { bonusHelp.hidden = betType.value !== 'bonus'; });
   $('#btn-save-tracked-bet').addEventListener('click', async event => { const evaluation = window.proplensLatestEvaluation, amount = Number(stake.value); if (!evaluation || !amount || amount <= 0) return toast('Enter the actual stake or bonus-bet value.', true); const button = event.currentTarget; button.disabled = true; try { const { prop, projection, model, value } = evaluation; await api('/api/tracker/bets', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ player_name: prop.player_name, team: prop.team, opponent: prop.opponent, market: prop.market, side_label: prop.side_label, line: prop.line, decimal_odds: prop.bet365_decimal, stake: amount, bet_type: betType.value, projection_mean: projection.mean, model_win_probability: model.win_probability, model_fair_decimal: model.fair_decimal, expected_value_pct: value.expected_value_pct, result_identity: evaluation.result_identity }) }); saveModal.hidden = true; toast('Saved as a pending bet.'); } catch (error) { toast(error.message, true); } finally { button.disabled = false; } });
   trackerList.addEventListener('click', async event => {
     const button = event.target.closest('button'); if (!button) return;
+    if (button.dataset.laterEvaluate) { const bet = findBet(button.dataset.laterEvaluate); if (!bet) return; try { await openLaterEvaluation(bet); } catch (error) { toast(error.message, true); } return; }
+    if (button.dataset.viewLaterEvaluations) { const bet = findBet(button.dataset.viewLaterEvaluations); if (bet) showLaterEvaluationHistory(bet); return; }
     if (button.dataset.editManual) return;
     if (button.dataset.openParlayTracker) { $('#btn-open-parlay-tracker').click(); return; }
     if (button.dataset.edit) { selectedBet = findBet(button.dataset.edit); if (!selectedBet) return; $('#edit-bet-summary').textContent = `${selectedBet.player_name} ${selectedBet.side_label} ${selectedBet.line}`; $('#edit-bet-type').value = selectedBet.bet_type; $('#edit-bet-stake').value = selectedBet.stake; $('#edit-bet-line').value = selectedBet.line; $('#edit-bet-odds').value = selectedBet.decimal_odds; $('#edit-bet-status').value = selectedBet.status; $('#edit-settlement-amount').value = selectedBet.settlement_amount ?? ''; editModal.hidden = false; return; }

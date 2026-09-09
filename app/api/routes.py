@@ -4,13 +4,14 @@ app.api.routes: REST API endpoints for opportunities, uploads, breakdowns, and s
 from __future__ import annotations
 
 import asyncio
+import csv
 import io
 import json
 import logging
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, Response, UploadFile
 from pydantic import BaseModel, field_validator
 
 from datetime import datetime, timezone
@@ -22,6 +23,7 @@ from app.core.normalizer import PlayerNameNormalizer, TeamNormalizer
 from app.core.distributions import DistributionEngine, DistributionType
 from app.core.ev import EVEngine, KellyConfig
 from app.db.bet_tracker_store import TrackedBetNotFoundError, bet_tracker_store
+from app.db.player_directory_store import player_directory_store
 from app.db.parlay_tracker_store import TrackedParlayNotFoundError, parlay_tracker_store
 from app.db.cache import cache
 from app.db.loaded_data_store import loaded_data_store
@@ -245,6 +247,20 @@ class ManualTrackedBetRequest(BaseModel):
         if value is not None and value < 0:
             raise ValueError("Cash-out amount cannot be negative.")
         return value
+
+
+class LaterEvaluationLinkRequest(BaseModel):
+    """The imported-projection player explicitly confirmed for a manual wager."""
+
+    player_name: str
+
+    @field_validator("player_name")
+    @classmethod
+    def validate_later_evaluation_player(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Choose the matching imported player before evaluating this bet.")
+        return cleaned
 
 
 class TrackedBetSettleRequest(BaseModel):
@@ -528,6 +544,102 @@ class TrackedBetUpdateRequest(BaseModel):
 @router.get("/health")
 def health_check() -> dict[str, str]:
     return {"status": "ok", "app": "PropLens Manual NFL Prop Evaluator"}
+
+
+DIRECTORY_HEADER_ALIASES = {
+    "player_name": {"player", "player name", "name", "full name"},
+    "team": {"team", "team abbreviation", "team abbr"},
+    "position": {"pos", "position"},
+}
+
+
+def _directory_column_map(headers: list[str] | None) -> dict[str, int]:
+    if not headers:
+        raise ValueError("The player directory file needs a header row.")
+    normalized = {
+        str(header).strip().casefold(): index
+        for index, header in enumerate(headers)
+        if str(header).strip()
+    }
+    mapped: dict[str, int] = {}
+    for field, aliases in DIRECTORY_HEADER_ALIASES.items():
+        source = next((normalized[alias] for alias in aliases if alias in normalized), None)
+        # Column zero is a valid location (for example, a CSV beginning with
+        # "Player,Team,Pos"), so distinguish it from a missing header.
+        if source is None:
+            raise ValueError("The directory CSV needs Player, Team, and Pos (or Position) columns.")
+        mapped[field] = source
+    return mapped
+
+
+def _parse_player_directory_csv(content: str) -> list[dict[str, str]]:
+    reader = csv.reader(io.StringIO(content))
+    headers = next((row for row in reader if any(str(cell).strip() for cell in row)), None)
+    columns = _directory_column_map(headers)
+    players: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for row in reader:
+        if not any(str(cell).strip() for cell in row):
+            continue
+        def cell(field: str) -> str:
+            index = columns[field]
+            return str(row[index]).strip() if index < len(row) else ""
+        player_name = cell("player_name")
+        team = TeamNormalizer.canonical_team(cell("team"))
+        position = cell("position").upper()
+        canonical_name = PlayerNameNormalizer.clean_name(player_name)
+        if not player_name or not canonical_name or not team or not position:
+            continue
+        key = (canonical_name, team)
+        if key in seen:
+            continue
+        seen.add(key)
+        players.append({"player_name": player_name, "canonical_name": canonical_name, "team": team, "position": position})
+    if not players:
+        raise ValueError("No valid players were found. Each row needs a player name, team, and position.")
+    return sorted(players, key=lambda player: (player["player_name"].casefold(), player["team"]))
+
+
+@router.get("/player-directory")
+def get_player_directory() -> dict[str, Any]:
+    """Directory metadata only; it never represents projections or model evidence."""
+    return player_directory_store.summary()
+
+
+@router.get("/player-directory/search")
+def search_player_directory(q: str = "", limit: int = Query(default=20, ge=1, le=50)) -> dict[str, Any]:
+    return {"players": player_directory_store.search(q, limit)}
+
+
+@router.get("/player-directory/template")
+def player_directory_template() -> Response:
+    return Response(
+        content="Player,Team,Pos\nSaquon Barkley,PHI,RB\nJa'Marr Chase,CIN,WR\nPatrick Mahomes,KC,QB\n",
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="proplens-player-directory-template.csv"'},
+    )
+
+
+@router.post("/player-directory/import")
+async def import_player_directory(file: UploadFile = File(...)) -> dict[str, Any]:
+    if not (file.filename or "").lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Upload a CSV player directory file.")
+    try:
+        content = (await file.read()).decode("utf-8-sig")
+        players = _parse_player_directory_csv(content)
+        saved = player_directory_store.replace(players)
+    except UnicodeDecodeError as exc:
+        raise HTTPException(status_code=400, detail="The directory CSV must be saved as UTF-8 text.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    summary = player_directory_store.summary()
+    return {"success": True, "count": len(saved["players"]), "summary": summary}
+
+
+@router.delete("/player-directory")
+def clear_player_directory() -> dict[str, Any]:
+    player_directory_store.clear()
+    return {"success": True, "summary": player_directory_store.summary()}
 
 
 @router.get("/settings")
@@ -1153,6 +1265,88 @@ def create_manual_tracked_bet(payload: ManualTrackedBetRequest) -> dict[str, Any
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"success": True, "bet": bet, "summary": bet_tracker_store.summary()}
+
+
+@router.post("/tracker/bets/{bet_id}/later-evaluation")
+def attach_later_evaluation(bet_id: str, payload: LaterEvaluationLinkRequest) -> dict[str, Any]:
+    """Attach an immutable, retrospective model snapshot to a manual straight wager.
+
+    The original manual record intentionally remains manual: its entry origin, financial
+    details, and result identity are never converted or replaced by this later check.
+    """
+    bet = next((item for item in bet_tracker_store.list() if item["id"] == bet_id), None)
+    if bet is None:
+        raise HTTPException(status_code=404, detail="Tracked bet not found.")
+    if bet.get("entry_origin") != "manual":
+        raise HTTPException(status_code=409, detail="Only a manual tracking entry can receive a later evaluation.")
+    if bet.get("category") != "player_prop":
+        raise HTTPException(status_code=400, detail="Later evaluations currently support imported player props only.")
+
+    try:
+        market = StatCategory(str(bet.get("market") or ""))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="This manual market is not available in the projection evaluator.") from exc
+    if market not in EVALUATOR_MARKETS:
+        raise HTTPException(status_code=400, detail="This manual market is not available in the projection evaluator.")
+
+    side_lookup = {"over": "over", "under": "under", "yes": "yes"}
+    side = side_lookup.get(str(bet.get("side_label") or "").strip().lower())
+    if side is None:
+        raise HTTPException(status_code=400, detail="This manual bet needs an Over, Under, or Yes selection before it can be evaluated.")
+    if not isinstance(bet.get("line"), (int, float)) or not isinstance(bet.get("decimal_odds"), (int, float)):
+        raise HTTPException(status_code=400, detail="This manual bet needs an exact line and decimal odds before it can be evaluated.")
+
+    evaluation = evaluate_manual_prop(
+        PropEvaluationRequest(
+            player_name=payload.player_name,
+            stat_category=market,
+            side=side,
+            line=float(bet["line"]),
+            odds=float(bet["decimal_odds"]),
+            stake=float(bet["stake"]),
+        )
+    )
+    prop = evaluation["prop"]
+    identity = evaluation["result_identity"]
+    saved_team = TeamNormalizer.canonical_team(str(bet.get("team") or ""))
+    saved_opponent = TeamNormalizer.canonical_team(str(bet.get("opponent") or ""))
+    if saved_team and TeamNormalizer.canonical_team(prop["team"]) != saved_team:
+        raise HTTPException(status_code=409, detail="The confirmed imported player has a different team than this manual bet. Correct the bet or choose the right player.")
+    if saved_opponent and TeamNormalizer.canonical_team(str(prop.get("opponent") or "")) != saved_opponent:
+        raise HTTPException(status_code=409, detail="The confirmed imported player has a different opponent than this manual bet. Correct the bet or choose the right player.")
+    prior_identity = bet.get("result_identity") if isinstance(bet.get("result_identity"), dict) else {}
+    for field in ("season", "week"):
+        saved_value, imported_value = prior_identity.get(field), identity.get(field)
+        if isinstance(saved_value, int) and isinstance(imported_value, int) and saved_value != imported_value:
+            raise HTTPException(status_code=409, detail=f"The imported projection is for a different NFL {field} than this manual bet.")
+
+    projection_snapshot = dict(evaluation["projection"])
+    projection_updated_at = projection_snapshot.get("updated_at")
+    if isinstance(projection_updated_at, datetime):
+        projection_snapshot["updated_at"] = projection_updated_at.isoformat()
+
+    snapshot = {
+        "version": 1,
+        "kind": "later_evaluation",
+        "evaluated_at": datetime.now(timezone.utc).isoformat(),
+        "projection_snapshot_id": identity.get("projection_snapshot_id"),
+        "projection_snapshot_label": identity.get("projection_snapshot_label"),
+        "projection": projection_snapshot,
+        "prop": prop,
+        "model": evaluation["model"],
+        "value": {
+            "expected_value_pct": evaluation["value"]["expected_value_pct"],
+            "entered_stake_expected_profit": evaluation["value"]["entered_stake_expected_profit"],
+        },
+        "result_identity": identity,
+    }
+    later_evaluations = list(bet.get("later_evaluations") or [])
+    later_evaluations.append(snapshot)
+    try:
+        updated = bet_tracker_store.update(bet_id, {"later_evaluations": later_evaluations})
+    except TrackedBetNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Tracked bet not found.") from exc
+    return {"success": True, "bet": updated, "later_evaluation": snapshot}
 
 
 @router.put("/tracker/bets/{bet_id}/manual")

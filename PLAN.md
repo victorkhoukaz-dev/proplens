@@ -186,7 +186,7 @@ Status: Phase 3A (independence baseline and Bet365 boosts), Phase 3B (personal s
 - Save a parlay and all component legs, plus original odds, effective boosted odds, boost/return treatment, stake type, and calculated winning return.
 - **Phase 3C.0 — implemented and user-tested:** manually track pending, won, lost, push-adjusted, void-adjusted, cashed-out, and cancelled parlays; correct saved financial details or settlement later; delete a test/error record deliberately. Keep straight and parlay ledgers separate, but offer a concise optional combined overall-performance roll-up for total profit, ROI on cash risk, cash wagered, and bonus value used.
 - **Manual-parlay extension — hybrid builder implemented and user-tested:** provide a separate **Track manual parlay** path for bets whose legs were not evaluated, are unsupported, or were placed before projections are available. Guided legs retain category, player, position, teams, market, side, and line; unrestricted free-text legs remain available in the same parlay. Record 2–10 legs, combined Bet365 odds, stake, cash/bonus type, optional profit boost or exact return, and optional shared season/week. Label it **Manual** and save no probability, fair odds, or EV.
-- **Mixed evaluated/manual parlay slip — implemented, awaiting user testing:** add an evaluated PropLens leg from the evaluator, then add a compact free-text manual leg directly in the same parlay slip. The evaluated leg retains its player, exact line, decimal odds, model probability, and saved result identity. The presence of even one manual leg switches the combined parlay to **tracking and payout only**: no combined model win chance, fair odds, EV, or sensitivity result is shown or saved. It remains fully trackable with odds, stake, boosts, return, settlement, and weekly reporting.
+- **Mixed evaluated/manual parlay slip — implemented and user-tested:** add an evaluated PropLens leg from the evaluator, then add a compact free-text manual leg directly in the same parlay slip. The evaluated leg retains its player, exact line, decimal odds, model probability, and saved result identity. The presence of even one manual leg switches the combined parlay to **tracking and payout only**: no combined model win chance, fair odds, EV, or sensitivity result is shown or saved. It remains fully trackable with odds, stake, boosts, return, settlement, and weekly reporting.
 - **Phase 3C.1 — future:** reuse Phase 2C game/player identifiers and result checks for every eligible leg, then present a cautious whole-parlay settlement suggestion only when all required legs have final, unambiguous results.
 - Apply sportsbook repricing rules cautiously when a leg pushes or is voided.
 
@@ -199,7 +199,7 @@ Status: Phase 3A (independence baseline and Bet365 boosts), Phase 3B (personal s
 
 ## Phase 4 — Tracker coverage and reporting
 
-Status: manual coverage and unified activity are implemented. Weekly filtering is the next planned reporting step after hybrid-parlay testing.
+Status: manual coverage, unified activity, and weekly filtering are implemented and user-tested. The next planned step is to let a manual wager receive a separately saved, later projection-based evaluation when projections arrive after the wager is placed.
 
 ### Phase 4A — Manual tracking entry
 
@@ -221,11 +221,36 @@ Status: manual coverage and unified activity are implemented. Weekly filtering i
 
 ### Phase 4C — NFL-week filtering and weekly ROI
 
-- **Implemented, awaiting user testing:** add reporting filters and summary metrics by NFL season and NFL week, rather than calendar date entered.
+- **Implemented and user-tested:** add reporting filters and summary metrics by NFL season and NFL week, rather than calendar date entered.
 - Apply the existing cash-bet ROI, total ROI on cash risk, cash wagered, bonus value used, and profit definitions consistently within the selected week.
 - Keep records without reliable season/week context visibly **Unassigned** and exclude them from weekly totals rather than guessing.
 - A parlay belongs to a week only when all legs have the same reliable NFL week; otherwise mark it Unassigned until corrected.
 - Require a manually entered season/week for a manual bet to appear in an NFL-week report.
+
+### Phase 4D — Later evaluation for an earlier manual bet
+
+Status: implemented and user-tested.
+
+- Support the common workflow where a wager is placed and tracked manually before FantasyPoints projections are published, then evaluated only after a later projection import.
+- Add an **Evaluate with projections** action to an eligible manual straight bet. It opens the normal evaluator with the recorded player, market, side, exact line, odds, stake, season, and week prefilled wherever they can be matched safely.
+- If the manual entry used free text, require the user to confirm the matching imported player. Never rely silently on an exact-looking name alone; show the selected player's team, opponent, and position to prevent a mistaken match.
+- When saved, attach a new, timestamped **later evaluation snapshot** to the original manual wager: projection-set ID/label, projection value, market, line, odds, model probability, fair odds, EV, and evaluation time.
+- Keep the wager itself immutable: its recorded stake, odds, bet type, placement time, entry origin, and settlement history never change. The row should plainly state **Placed manually — evaluated later**.
+- A later evaluation does not convert the wager into an originally model-backed decision. Future model-performance reporting must keep decision-time evaluated bets distinct from retrospective evaluations.
+- A subsequent projection import never overwrites the attached later-evaluation snapshot. A user may create another timestamped comparison evaluation, but it must remain separate from both the original wager and the first later evaluation.
+- Initially support only compatible imported player props. Unsupported manual markets, unmatchable players, and records without sufficient identity remain tracking-only.
+- Reuse the existing result-identity safeguards independently: the later evaluation may supply useful player/game context, but it must not weaken the cautious result-confirmation rules.
+
+### Phase 4E — Player directory for manual entry
+
+Status: implemented and internally tested; awaiting user testing.
+
+- Add a separate local **Player directory** in the Data library, entirely distinct from weekly projection sets.
+- Import or replace a simple CSV with Player/Name, Team, and Pos/Position columns; keep the directory between weekly FantasyPoints imports.
+- Use directory records only to speed up manual player-prop tracking: player name, team, position, and a position-based default market.
+- Make active FantasyPoints matches take precedence over directory records in manual autocomplete. A directory-only match must visibly state **no projection loaded**.
+- Never show directory-only players in the projection evaluator or Browse projections panel, and never infer projection, model probability, fair odds, or EV from directory data.
+- Allow clearing the directory only through an explicit confirmation; it must never change saved bets, parlays, or projection sets.
 
 ## Phase 5 — Model improvement
 
@@ -267,8 +292,8 @@ Status: monitor and test opportunistically; do not make it the core workflow yet
 
 ## Current recommended order
 
-1. Test the Phase 4C season/week filters using the first real tracked bets and parlays; verify KPI totals, the Include pending preference, and Unassigned handling.
-2. Use PropLens through real NFL workflow and record friction before expanding data-entry automation.
+1. Test Phase 4E by importing an offensive-player CSV, creating a directory-only manual player prop, and verifying the no-projection label plus auto-filled position/team/default market.
+2. Use PropLens through real NFL workflow and record friction before expanding other data-entry automation.
 3. Return to Phase 3C.1 for cautious, confirm-only parlay result suggestions when real parlay tracking justifies it.
 4. Treat Phase 3D correlation and Phase 5 model improvement as later evidence-driven work.
 
@@ -278,7 +303,6 @@ These are deliberately **not committed implementation phases**. This section is 
 
 - **Bet365 screenshot-to-draft:** upload or paste a bet-slip screenshot, extract its legs, combined odds, stake, boost, and return, then prefill a reviewable manual-parlay draft. Never save directly from OCR; require the user to verify every extracted number and side first.
 - **Personal-assumption baseline for mixed parlays:** if real workflow shows it is valuable, allow an optional user-entered probability for every manual leg. Show that result only as a clearly labeled personal-assumption comparison, never as a model EV verdict; keep same-game correlation warnings.
-- **Complete active-player directory:** import or maintain offensive and defensive NFL rosters so manual player entry can autocomplete beyond the active projection file. Revisit after defensive-prop usage shows whether projection-only suggestions are insufficient.
 - **High-confidence automatic settlement (Phase 2C.5):** consider only after several live weeks demonstrate reliable matching and no unexplained Bet365 grading discrepancies. Keep explicit confirmation as a permanent fallback.
 - **Faster or supported sports-stat provider:** reconsider ESPN, API-Sports, or another provider if same-day results, play-by-play, or supported service guarantees justify cost and integration work. Re-test price and coverage before any purchase.
 - **Parlay result suggestions (Phase 3C.1):** suggest a whole-parlay outcome only when every required structured leg has an exact, final, supported result. Keep free-text and ambiguous legs on manual settlement.
