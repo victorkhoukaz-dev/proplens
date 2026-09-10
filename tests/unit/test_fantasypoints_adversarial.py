@@ -127,6 +127,36 @@ class TestAdversarialDelimitersAndPastes:
         names = {p.player_name for p in projs}
         assert names == {"Patrick Mahomes", "Josh Allen"}
 
+    def test_spreadsheet_blank_row_before_headers_is_skipped(self, adapter):
+        csv_text = (
+            ",,,\n"
+            "Player,Team,Position,Rush Yds\n"
+            "Jahmyr Gibbs,DET,RB,72.5\n"
+        )
+        projs = adapter.parse_clipboard_text(csv_text)
+        rush = next(item for item in projs if item.stat_category == StatCategory.RUSHING_YARDS)
+        assert rush.player_name == "Jahmyr Gibbs"
+        assert rush.projection_mean == 72.5
+
+    def test_player_directory_csv_is_not_mistaken_for_zero_projections(self, adapter):
+        directory_csv = "Player,Position,Team\nJahmyr Gibbs,RB,DET\n"
+        assert adapter.parse_clipboard_text(directory_csv) == []
+
+    def test_fantasypoints_grouped_betting_export_headers(self, adapter):
+        csv_text = (
+            ",,,,Projection,,Passing,,,,,Rushing,,,Receiving,,,\n"
+            "RANK,NAME,Position,Team,OPP,FPTS,ATT,CMP,YDS,TD,INT,ATT,YDS,TD,TGT,REC,YDS,TD\n"
+            "30,Jaxon Smith-Njigba,WR,SEA,NE,17.1,,0,0,0,0,0,0,0,9,6,77,0.5\n"
+            "29,Drake Maye,QB,NE,SEA,17.1,29,18,210,1.2,1,5,32,0.3,0,0,0,0\n"
+        )
+        projs = adapter.parse_clipboard_text(csv_text)
+        jsn_receiving = next(item for item in projs if item.player_name == "Jaxon Smith-Njigba" and item.stat_category == StatCategory.RECEIVING_YARDS)
+        maye_passing = next(item for item in projs if item.player_name == "Drake Maye" and item.stat_category == StatCategory.PASSING_YARDS)
+        maye_rushing = next(item for item in projs if item.player_name == "Drake Maye" and item.stat_category == StatCategory.RUSHING_YARDS)
+        assert jsn_receiving.projection_mean == 77
+        assert maye_passing.projection_mean == 210
+        assert maye_rushing.projection_mean == 32
+
 
 class TestAdversarialMalformedTables:
     """Stress tests on malformed rows, jagged tables, and corrupted headers."""
@@ -285,4 +315,3 @@ class TestAdversarialInvalidTypesAndCorruptInputs:
     def test_scientific_notation_float(self, adapter):
         assert FantasyPointsAdapter.sanitize_float("1.25e2") == 125.0
         assert FantasyPointsAdapter.sanitize_float("2.5E1") == 25.0
-

@@ -167,6 +167,15 @@ HEADER_SYNONYMS: dict[str, str] = {
     "points": "fantasy_points",
 }
 
+# A roster alone is useful for the Player directory, but it is not a projection
+# file. Require at least one actual projected-stat column before creating model
+# inputs, so a Player/Team/Pos CSV can never become zero-valued projections.
+PROJECTION_STAT_COLUMNS = {
+    "pass_att", "pass_cmp", "pass_yds", "pass_td", "pass_int",
+    "rush_att", "rush_yds", "rush_td",
+    "targets", "receptions", "rec_yds", "rec_td", "anytime_td",
+}
+
 
 class FantasyPointsAdapter(BaseProjectionAdapter):
     """
@@ -256,7 +265,9 @@ class FantasyPointsAdapter(BaseProjectionAdapter):
             return self._parse_excel_bytes(content, season=season, week=week)
 
         # Standard text file parsing
-        text = content.decode("utf-8", errors="replace")
+        # utf-8-sig removes the invisible byte-order mark that spreadsheet CSV
+        # exports often put before the first header cell.
+        text = content.decode("utf-8-sig", errors="replace")
         return self.parse_clipboard_text(text, season=season, week=week)
 
     @classmethod
@@ -301,11 +312,19 @@ class FantasyPointsAdapter(BaseProjectionAdapter):
         if not raw_rows:
             return []
 
-        header_row = raw_rows[0]
-        normalized_headers = self._normalize_headers(header_row)
+        # Excel/LibreOffice exports can preserve a visually blank first row as
+        # `,,`. It is not a header and must not shift the whole table.
+        while raw_rows and not any(str(cell).strip().lstrip("\ufeff") for cell in raw_rows[0]):
+            raw_rows.pop(0)
+        if not raw_rows:
+            return []
+
+        normalized_headers, data_start = self._table_headers(raw_rows)
+        if "player" not in normalized_headers or not (set(normalized_headers) & PROJECTION_STAT_COLUMNS):
+            return []
 
         dict_records: list[dict[str, Any]] = []
-        for row in raw_rows[1:]:
+        for row in raw_rows[data_start:]:
             if not row or all(not cell.strip() for cell in row):
                 continue
             row_dict: dict[str, Any] = {}
@@ -318,6 +337,36 @@ class FantasyPointsAdapter(BaseProjectionAdapter):
                 dict_records.append(row_dict)
 
         return self._parse_dict_records(dict_records, season=season, week=week, inferred_pos=inferred_pos)
+
+    def _table_headers(self, rows: Sequence[Sequence[Any]]) -> tuple[list[str], int]:
+        """Return normalized headers and the row where player data begins.
+
+        FantasyPoints' betting export uses two header rows: one with groups such
+        as Passing/Rushing/Receiving, followed by generic labels like YDS and
+        TD. Those labels only make sense when combined with their group.
+        """
+        first = self._normalize_headers([str(cell or "").strip().lstrip("\ufeff") for cell in rows[0]])
+        if "player" in first or len(rows) < 2:
+            return first, 1
+        second_raw = [str(cell or "").strip().lstrip("\ufeff") for cell in rows[1]]
+        second = self._normalize_headers(second_raw)
+        if "player" not in second:
+            return first, 1
+
+        group = ""
+        combined: list[str] = []
+        grouped_columns = {
+            "passing": {"att": "pass_att", "cmp": "pass_cmp", "yds": "pass_yds", "td": "pass_td", "int": "pass_int"},
+            "rushing": {"att": "rush_att", "yds": "rush_yds", "td": "rush_td"},
+            "receiving": {"tgt": "targets", "rec": "receptions", "yds": "rec_yds", "td": "rec_td"},
+        }
+        for index, detail in enumerate(second_raw):
+            group_label = str(rows[0][index] if index < len(rows[0]) else "").strip().casefold()
+            if group_label in grouped_columns:
+                group = group_label
+            detail_key = re.sub(r"[^a-z0-9]", "", detail.casefold())
+            combined.append(grouped_columns.get(group, {}).get(detail_key, second[index]))
+        return combined, 2
 
     def sniff_delimiter(self, text: str) -> str:
         """
@@ -536,14 +585,20 @@ class FantasyPointsAdapter(BaseProjectionAdapter):
             if not rows:
                 continue
 
-            header_row = [str(cell or "").strip() for cell in rows[0]]
-            normalized_headers = self._normalize_headers(header_row)
+            while rows and not any(str(cell or "").strip() for cell in rows[0]):
+                rows.pop(0)
+            if not rows:
+                continue
+
+            normalized_headers, data_start = self._table_headers(rows)
+            if "player" not in normalized_headers or not (set(normalized_headers) & PROJECTION_STAT_COLUMNS):
+                continue
 
             # Check if sheet name indicates a position
             pos_hint = sheet_name.upper().strip() if sheet_name.upper().strip() in ("QB", "RB", "WR", "TE") else None
 
             dict_records: list[dict[str, Any]] = []
-            for row in rows[1:]:
+            for row in rows[data_start:]:
                 if not row or all(cell is None or str(cell).strip() == "" for cell in row):
                     continue
                 row_dict: dict[str, Any] = {}

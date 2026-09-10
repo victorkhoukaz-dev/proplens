@@ -1683,6 +1683,15 @@ async def upload_projections(
         season=season,
         week=week,
     )
+    if not projections:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "No usable player projections were found. Use a FantasyPoints file with a Player column "
+                "and at least one projected stat (for example Pass Yds, Rush Yds, Rec Yds, Receptions, or TDs). "
+                "A Player/Team/Position-only file belongs in Data library → Player directory."
+            ),
+        )
     stored = _save_projection_import(
         projections,
         label=label,
@@ -1735,6 +1744,11 @@ def paste_data(payload: PasteUploadRequest) -> dict[str, Any]:
     if payload.data_type == "projections":
         adapter = FantasyPointsAdapter()
         projections = adapter.parse_projections(payload.content, season=payload.season, week=payload.week)
+        if not projections:
+            raise HTTPException(
+                status_code=400,
+                detail="No usable player projections were found in the pasted data. Include Player plus at least one projected stat column.",
+            )
         stored = _save_projection_import(
             projections,
             label=payload.label,
