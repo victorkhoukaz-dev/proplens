@@ -114,6 +114,7 @@
     form.reset();
     category.value = 'player_prop';
     status.value = 'pending';
+    $('#manual-odds').value = '1.86';
     editingId = null;
     renderMarkets();
     updateSettlementVisibility();
