@@ -117,6 +117,24 @@ class BetTrackerStore:
                 return bet
         raise TrackedBetNotFoundError(bet_id)
 
+    def append_later_evaluations(self, snapshots_by_bet_id: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+        """Atomically append already-validated later-evaluation snapshots."""
+        with self._lock:
+            bets = self._read()
+            indexed = {bet["id"]: bet for bet in bets}
+            missing = [bet_id for bet_id in snapshots_by_bet_id if bet_id not in indexed]
+            if missing:
+                raise TrackedBetNotFoundError(missing[0])
+            updated: list[dict[str, Any]] = []
+            for bet_id, snapshot in snapshots_by_bet_id.items():
+                bet = indexed[bet_id]
+                history = list(bet.get("later_evaluations") or [])
+                history.append(snapshot)
+                bet["later_evaluations"] = history
+                updated.append(bet)
+            self._write(bets)
+            return updated
+
     def delete(self, bet_id: str) -> None:
         with self._lock:
             bets = self._read()

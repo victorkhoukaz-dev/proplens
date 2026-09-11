@@ -263,6 +263,23 @@ class LaterEvaluationLinkRequest(BaseModel):
         return cleaned
 
 
+class BatchLaterEvaluationSaveRequest(BaseModel):
+    """Explicit manual selection from the read-only batch preview."""
+
+    bet_ids: list[str]
+
+    @field_validator("bet_ids")
+    @classmethod
+    def validate_bet_ids(cls, value: list[str]) -> list[str]:
+        cleaned = [str(bet_id).strip() for bet_id in value if str(bet_id).strip()]
+        if not cleaned:
+            raise ValueError("Select at least one ready manual bet.")
+        if len(cleaned) > 100:
+            raise ValueError("Select no more than 100 manual bets at once.")
+        if len(set(cleaned)) != len(cleaned):
+            raise ValueError("Each manual bet can be selected only once.")
+        return cleaned
+
 class TrackedBetSettleRequest(BaseModel):
     status: Literal["won", "lost", "push", "cashed_out", "cancelled"]
     settlement_amount: float | None = None
@@ -827,8 +844,10 @@ def _manual_parlay_record(payload: ManualTrackedParlayRequest) -> dict[str, Any]
         raise HTTPException(status_code=400, detail="Enter the actual amount paid by Bet365 for this outcome.")
 
     effective_odds = round(1 + (payload.decimal_odds - 1) * (1 + payload.profit_boost_pct / 100), 4)
-    winning_total_return = payload.actual_total_return if payload.actual_total_return is not None else round(payload.stake * effective_odds, 2)
-    if winning_total_return < payload.stake:
+    winning_total_return = payload.actual_total_return if payload.actual_total_return is not None else round(
+        payload.stake * (effective_odds - 1 if payload.bet_type == "bonus" else effective_odds), 2
+    )
+    if payload.bet_type == "cash" and winning_total_return < payload.stake:
         raise HTTPException(status_code=400, detail="Winning total return cannot be less than the stake.")
     manual_legs = []
     for leg in payload.legs:
@@ -869,6 +888,7 @@ def _manual_parlay_record(payload: ManualTrackedParlayRequest) -> dict[str, Any]
         "profit_boost_pct": payload.profit_boost_pct,
         "actual_total_return": payload.actual_total_return,
         "winning_total_return": round(winning_total_return, 2),
+        "winning_return_includes_stake": payload.bet_type == "cash",
         "independent_model_probability": None,
         "personal_sensitivity_probability": None,
         "season": payload.season,
@@ -1291,16 +1311,8 @@ def create_manual_tracked_bet(payload: ManualTrackedBetRequest) -> dict[str, Any
     return {"success": True, "bet": bet, "summary": bet_tracker_store.summary()}
 
 
-@router.post("/tracker/bets/{bet_id}/later-evaluation")
-def attach_later_evaluation(bet_id: str, payload: LaterEvaluationLinkRequest) -> dict[str, Any]:
-    """Attach an immutable, retrospective model snapshot to a manual straight wager.
-
-    The original manual record intentionally remains manual: its entry origin, financial
-    details, and result identity are never converted or replaced by this later check.
-    """
-    bet = next((item for item in bet_tracker_store.list() if item["id"] == bet_id), None)
-    if bet is None:
-        raise HTTPException(status_code=404, detail="Tracked bet not found.")
+def _evaluate_later_manual_bet(bet: dict[str, Any], player_name: str) -> dict[str, Any]:
+    """Evaluate one manual wager against the active set without mutating its record."""
     if bet.get("entry_origin") != "manual":
         raise HTTPException(status_code=409, detail="Only a manual tracking entry can receive a later evaluation.")
     if bet.get("category") != "player_prop":
@@ -1322,7 +1334,7 @@ def attach_later_evaluation(bet_id: str, payload: LaterEvaluationLinkRequest) ->
 
     evaluation = evaluate_manual_prop(
         PropEvaluationRequest(
-            player_name=payload.player_name,
+            player_name=player_name,
             stat_category=market,
             side=side,
             line=float(bet["line"]),
@@ -1344,19 +1356,24 @@ def attach_later_evaluation(bet_id: str, payload: LaterEvaluationLinkRequest) ->
         if isinstance(saved_value, int) and isinstance(imported_value, int) and saved_value != imported_value:
             raise HTTPException(status_code=409, detail=f"The imported projection is for a different NFL {field} than this manual bet.")
 
+    return evaluation
+
+
+def _later_evaluation_snapshot(evaluation: dict[str, Any]) -> dict[str, Any]:
+    """Create the immutable record shared by single and batch later evaluation."""
     projection_snapshot = dict(evaluation["projection"])
     projection_updated_at = projection_snapshot.get("updated_at")
     if isinstance(projection_updated_at, datetime):
         projection_snapshot["updated_at"] = projection_updated_at.isoformat()
-
-    snapshot = {
+    identity = evaluation["result_identity"]
+    return {
         "version": 1,
         "kind": "later_evaluation",
         "evaluated_at": datetime.now(timezone.utc).isoformat(),
         "projection_snapshot_id": identity.get("projection_snapshot_id"),
         "projection_snapshot_label": identity.get("projection_snapshot_label"),
         "projection": projection_snapshot,
-        "prop": prop,
+        "prop": evaluation["prop"],
         "model": evaluation["model"],
         "value": {
             "expected_value_pct": evaluation["value"]["expected_value_pct"],
@@ -1364,6 +1381,104 @@ def attach_later_evaluation(bet_id: str, payload: LaterEvaluationLinkRequest) ->
         },
         "result_identity": identity,
     }
+
+
+@router.post("/tracker/bets/later-evaluations/preview")
+def preview_later_evaluations() -> dict[str, Any]:
+    """Preview safe batch later evaluations without writing to the tracker."""
+    items: list[dict[str, Any]] = []
+    manual_bets = [
+        bet for bet in bet_tracker_store.list()
+        if bet.get("entry_origin") == "manual" and bet.get("category") == "player_prop" and bet.get("status") == "pending"
+    ]
+    for bet in manual_bets:
+        item: dict[str, Any] = {
+            "bet_id": bet["id"],
+            "player_name": bet.get("player_name"),
+            "team": bet.get("team"),
+            "opponent": bet.get("opponent"),
+            "market": bet.get("market"),
+            "side_label": bet.get("side_label"),
+            "line": bet.get("line"),
+            "decimal_odds": bet.get("decimal_odds"),
+        }
+        if bet.get("later_evaluations"):
+            items.append({**item, "status": "already_evaluated", "message": "This bet already has a saved later evaluation."})
+            continue
+        try:
+            evaluation = _evaluate_later_manual_bet(bet, str(bet.get("player_name") or ""))
+        except HTTPException as exc:
+            items.append({**item, "status": "needs_review", "message": str(exc.detail)})
+            continue
+        items.append(
+            {
+                **item,
+                "status": "ready",
+                "projection": evaluation["projection"],
+                "model": evaluation["model"],
+                "value": {
+                    "expected_value_pct": evaluation["value"]["expected_value_pct"],
+                    "entered_stake_expected_profit": evaluation["value"]["entered_stake_expected_profit"],
+                },
+                "projection_snapshot_label": evaluation["result_identity"].get("projection_snapshot_label"),
+            }
+        )
+    ready = [item for item in items if item["status"] == "ready"]
+    ready.sort(key=lambda item: float(item["value"]["expected_value_pct"]), reverse=True)
+    not_ready = [item for item in items if item["status"] != "ready"]
+    return {
+        "success": True,
+        "projection_context": _active_projection_context(),
+        "checked": len(items),
+        "ready": len(ready),
+        "needs_review": len(not_ready),
+        "items": [*ready, *not_ready],
+    }
+
+
+@router.post("/tracker/bets/later-evaluations/save")
+def save_batch_later_evaluations(payload: BatchLaterEvaluationSaveRequest) -> dict[str, Any]:
+    """Revalidate selected preview rows, then save every snapshot together."""
+    by_id = {bet["id"]: bet for bet in bet_tracker_store.list()}
+    snapshots: dict[str, dict[str, Any]] = {}
+    errors: list[str] = []
+    for bet_id in payload.bet_ids:
+        bet = by_id.get(bet_id)
+        if bet is None:
+            errors.append("A selected bet no longer exists.")
+            continue
+        if bet.get("status") != "pending":
+            errors.append(f"{bet.get('player_name') or 'A selected bet'} is no longer pending.")
+            continue
+        if bet.get("later_evaluations"):
+            errors.append(f"{bet.get('player_name') or 'A selected bet'} already has a saved later evaluation.")
+            continue
+        try:
+            snapshots[bet_id] = _later_evaluation_snapshot(_evaluate_later_manual_bet(bet, str(bet.get("player_name") or "")))
+        except HTTPException as exc:
+            errors.append(f"{bet.get('player_name') or 'A selected bet'}: {exc.detail}")
+    if errors:
+        raise HTTPException(status_code=409, detail="Nothing was saved. Refresh the preview and review: " + " ".join(errors))
+    try:
+        saved = bet_tracker_store.append_later_evaluations(snapshots)
+    except TrackedBetNotFoundError as exc:
+        raise HTTPException(status_code=409, detail="Nothing was saved because a selected bet changed. Refresh the preview and try again.") from exc
+    return {"success": True, "saved_count": len(saved), "bets": saved}
+
+
+@router.post("/tracker/bets/{bet_id}/later-evaluation")
+def attach_later_evaluation(bet_id: str, payload: LaterEvaluationLinkRequest) -> dict[str, Any]:
+    """Attach an immutable, retrospective model snapshot to a manual straight wager.
+
+    The original manual record intentionally remains manual: its entry origin, financial
+    details, and result identity are never converted or replaced by this later check.
+    """
+    bet = next((item for item in bet_tracker_store.list() if item["id"] == bet_id), None)
+    if bet is None:
+        raise HTTPException(status_code=404, detail="Tracked bet not found.")
+
+    evaluation = _evaluate_later_manual_bet(bet, payload.player_name)
+    snapshot = _later_evaluation_snapshot(evaluation)
     later_evaluations = list(bet.get("later_evaluations") or [])
     later_evaluations.append(snapshot)
     try:
@@ -1434,13 +1549,16 @@ def list_tracked_parlays(include_pending: bool = True) -> dict[str, Any]:
 
 @router.post("/tracker/parlays")
 def create_tracked_parlay(payload: TrackedParlayCreateRequest) -> dict[str, Any]:
-    winning_total_return = payload.actual_total_return if payload.actual_total_return is not None else round(payload.stake * payload.effective_decimal_odds, 2)
-    if winning_total_return < payload.stake:
+    winning_total_return = payload.actual_total_return if payload.actual_total_return is not None else round(
+        payload.stake * (payload.effective_decimal_odds - 1 if payload.bet_type == "bonus" else payload.effective_decimal_odds), 2
+    )
+    if payload.bet_type == "cash" and winning_total_return < payload.stake:
         raise HTTPException(status_code=400, detail="Winning total return cannot be less than the stake.")
     parlay = parlay_tracker_store.create(
         {
             **payload.model_dump(),
             "winning_total_return": round(winning_total_return, 2),
+            "winning_return_includes_stake": payload.bet_type == "cash",
             "entry_origin": "parlay_evaluator",
         }
     )
@@ -1492,8 +1610,10 @@ def settle_tracked_parlay(parlay_id: str, payload: TrackedParlaySettleRequest) -
 
 @router.put("/tracker/parlays/{parlay_id}")
 def update_tracked_parlay(parlay_id: str, payload: TrackedParlayUpdateRequest) -> dict[str, Any]:
-    winning_total_return = payload.actual_total_return if payload.actual_total_return is not None else round(payload.stake * payload.effective_decimal_odds, 2)
-    if winning_total_return < payload.stake:
+    winning_total_return = payload.actual_total_return if payload.actual_total_return is not None else round(
+        payload.stake * (payload.effective_decimal_odds - 1 if payload.bet_type == "bonus" else payload.effective_decimal_odds), 2
+    )
+    if payload.bet_type == "cash" and winning_total_return < payload.stake:
         raise HTTPException(status_code=400, detail="Winning total return cannot be less than the stake.")
     if payload.status in {"cashed_out", "push_adjusted", "void_adjusted"} and payload.settlement_amount is None:
         raise HTTPException(status_code=400, detail="Enter the actual amount paid by Bet365 for this outcome.")
@@ -1503,6 +1623,7 @@ def update_tracked_parlay(parlay_id: str, payload: TrackedParlayUpdateRequest) -
             {
                 **payload.model_dump(),
                 "winning_total_return": round(winning_total_return, 2),
+                "winning_return_includes_stake": payload.bet_type == "cash",
             },
         )
     except TrackedParlayNotFoundError as exc:

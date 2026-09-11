@@ -50,10 +50,24 @@ class ParlayTrackerStore:
             return saved
 
     @staticmethod
+    def winning_cash_payout(parlay: dict[str, Any]) -> float:
+        """Return the cash actually paid if this parlay wins.
+
+        Older bonus parlays stored the gross decimal-odds return, including the
+        non-returned bonus stake. New bonus parlays store only the cash payout.
+        The explicit flag keeps both formats safe without rewriting history.
+        """
+        winning_return = float(parlay["winning_total_return"])
+        if parlay["bet_type"] == "bonus" and parlay.get("winning_return_includes_stake") is not False:
+            return round(winning_return - float(parlay["stake"]), 2)
+        return round(winning_return, 2)
+
+    @staticmethod
     def _profit(parlay: dict[str, Any], status: str, settlement_amount: float | None = None) -> float:
         stake = float(parlay["stake"])
         if status == "won":
-            return round(float(parlay["winning_total_return"]) - stake, 2)
+            payout = ParlayTrackerStore.winning_cash_payout(parlay)
+            return payout if parlay["bet_type"] == "bonus" else round(payout - stake, 2)
         if status == "lost":
             return 0.0 if parlay["bet_type"] == "bonus" else round(-stake, 2)
         if status in {"cashed_out", "push_adjusted", "void_adjusted"}:

@@ -49,6 +49,12 @@ def test_bonus_parlay_loss_and_adjusted_cash_payouts(tmp_path, monkeypatch):
     lost = client.post(f"/api/tracker/parlays/{bonus['id']}/settle", json={"status": "lost"})
     assert lost.json()["parlay"]["profit"] == 0.0
 
+    won_bonus = client.post("/api/tracker/parlays", json=payload(bet_type="bonus")).json()["parlay"]
+    assert won_bonus["winning_total_return"] == 20.0
+    assert won_bonus["winning_return_includes_stake"] is False
+    won = client.post(f"/api/tracker/parlays/{won_bonus['id']}/settle", json={"status": "won"})
+    assert won.json()["parlay"]["profit"] == 20.0
+
     cash = client.post("/api/tracker/parlays", json=payload()).json()["parlay"]
     adjusted = client.post(f"/api/tracker/parlays/{cash['id']}/settle", json={"status": "void_adjusted", "settlement_amount": 3.0})
     assert adjusted.status_code == 200

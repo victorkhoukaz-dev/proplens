@@ -1,9 +1,9 @@
 /* Phase 2A: local straight-bet tracker with compact ledger controls. */
 (() => {
   const $ = selector => document.querySelector(selector);
-  const trackerModal = $('#tracker-modal'), saveModal = $('#save-bet-modal'), editModal = $('#edit-bet-modal'), cashoutModal = $('#cashout-modal'), laterEvaluationModal = $('#later-evaluation-modal'), laterEvaluationHistoryModal = $('#later-evaluation-history-modal'), savedEvaluationModal = $('#saved-evaluation-modal');
+  const trackerModal = $('#tracker-modal'), saveModal = $('#save-bet-modal'), editModal = $('#edit-bet-modal'), cashoutModal = $('#cashout-modal'), laterEvaluationModal = $('#later-evaluation-modal'), laterEvaluationHistoryModal = $('#later-evaluation-history-modal'), savedEvaluationModal = $('#saved-evaluation-modal'), batchEvaluationPreviewModal = $('#batch-evaluation-preview-modal');
   const trackerList = $('#tracker-list'), trackerSummary = $('#tracker-summary'), trackerIncludePending = $('#tracker-include-pending'), trackerIncludeParlays = $('#tracker-include-parlays'), trackerSearch = $('#tracker-search'), trackerSeasonFilter = $('#tracker-season-filter'), trackerWeekFilter = $('#tracker-week-filter'), trackerActivityFilter = $('#tracker-activity-filter'), trackerStatusFilter = $('#tracker-status-filter'), trackerTypeFilter = $('#tracker-type-filter'), trackerSort = $('#tracker-sort'), trackerVisibleCount = $('#tracker-visible-count'), trackerReportContext = $('#tracker-report-context'), betType = $('#tracker-bet-type'), stake = $('#tracker-stake'), bonusHelp = $('#tracker-bonus-help'), checkResults = $('#btn-check-results'), resultPreview = $('#result-preview'), resultPreviewSummary = $('#result-preview-summary'), resultPreviewList = $('#result-preview-list'), toggleResultPreview = $('#btn-toggle-result-preview'), suggestionsOnly = $('#btn-suggestions-only');
-  let selectedBet = null, selectedLaterEvaluationBet = null, laterEvaluationPlayers = [], latestTrackerData = null, latestOverallSummary = null, latestResultPreview = null, showingSuggestionsOnly = false;
+  let selectedBet = null, selectedLaterEvaluationBet = null, laterEvaluationPlayers = [], latestTrackerData = null, latestOverallSummary = null, latestResultPreview = null, latestBatchEvaluationPreview = null, showingSuggestionsOnly = false;
   const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
   const money = value => `$${Number(value || 0).toFixed(2)}`;
   const percent = value => value === null || value === undefined ? '—' : `${Number(value).toFixed(1)}%`;
@@ -239,8 +239,42 @@
     $('#saved-evaluation-list').innerHTML = `<article class="later-evaluation-history-item"><strong>Saved model snapshot</strong><small>Bet365 line ${escapeHtml(bet.side_label)} ${escapeHtml(bet.line)} · Bet365 odds ${Number.isFinite(odds) ? odds.toFixed(2) : '—'}</small><div><span>Projection <b>${Number.isFinite(projection) ? projection.toFixed(1) : '—'}</b></span><span>Model win <b>${modelPercent(probability)}</b></span><span>Fair odds <b>${Number.isFinite(fairOdds) ? fairOdds.toFixed(2) : '—'}</b></span><span>EV <b class="${ev >= 0 ? 'positive' : 'negative'}">${Number.isFinite(ev) ? `${ev >= 0 ? '+' : ''}${ev.toFixed(2)}%` : '—'}</b></span></div></article>`;
     savedEvaluationModal.hidden = false;
   }
+  function batchEvaluationPreviewMarkup(item) {
+    const selection = [item.side_label, item.line].filter(value => value !== null && value !== undefined && value !== '').join(' ');
+    const heading = `${item.player_name || 'Unnamed player'} · ${selection} · ${marketLabel(item.market)}`;
+    if (item.status !== 'ready') return `<article class="batch-evaluation-row needs-review"><div><strong>${escapeHtml(heading)}</strong><small>${escapeHtml(item.message || 'This bet needs review before it can be evaluated.')}</small></div><span>Needs review</span></article>`;
+    const projection = Number(item.projection?.mean), probability = Number(item.model?.win_probability), fairOdds = Number(item.model?.fair_decimal), ev = Number(item.value?.expected_value_pct);
+    return `<article class="batch-evaluation-row ready"><label class="batch-evaluation-select"><input type="checkbox" data-batch-evaluation-bet="${escapeHtml(item.bet_id)}" checked aria-label="Save later evaluation for ${escapeHtml(item.player_name)}"><span></span></label><div class="batch-evaluation-heading"><strong>${escapeHtml(heading)}</strong><small>${escapeHtml(item.team || '—')} vs ${escapeHtml(item.opponent || '—')} · Bet365 ${Number(item.decimal_odds).toFixed(2)}</small></div><div class="batch-evaluation-metrics"><span>Projection <b>${Number.isFinite(projection) ? projection.toFixed(1) : '—'}</b></span><span>Model win <b>${modelPercent(probability)}</b></span><span>Fair odds <b>${Number.isFinite(fairOdds) ? fairOdds.toFixed(2) : '—'}</b></span><span>EV <b class="${ev >= 0 ? 'positive' : 'negative'}">${Number.isFinite(ev) ? `${ev >= 0 ? '+' : ''}${ev.toFixed(2)}%` : '—'}</b></span></div><span class="batch-evaluation-status">Ready</span></article>`;
+  }
+  function selectedBatchEvaluationIds() { return [...document.querySelectorAll('[data-batch-evaluation-bet]:checked')].map(input => input.dataset.batchEvaluationBet); }
+  function updateBatchEvaluationSaveButton() {
+    const ids = selectedBatchEvaluationIds(), button = $('#btn-save-batch-evaluations');
+    button.disabled = !ids.length;
+    button.textContent = ids.length ? `Save ${ids.length} selected evaluation${ids.length === 1 ? '' : 's'}` : 'Save selected evaluations';
+  }
+  async function openBatchEvaluationPreview() {
+    const button = $('#btn-batch-later-evaluation');
+    button.disabled = true; button.textContent = 'Evaluating…';
+    try {
+      const preview = await api('/api/tracker/bets/later-evaluations/preview', { method: 'POST' });
+      latestBatchEvaluationPreview = preview;
+      const context = preview.projection_context?.label || 'the active projection set';
+      $('#batch-evaluation-preview-summary').textContent = `${preview.ready} ready · ${preview.needs_review} need review · checked against ${context}.`;
+      $('#batch-evaluation-preview-list').innerHTML = preview.items.length ? preview.items.map(batchEvaluationPreviewMarkup).join('') : '<p class="field-help">There are no pending manual player props to evaluate.</p>';
+      updateBatchEvaluationSaveButton();
+      batchEvaluationPreviewModal.hidden = false;
+    } catch (error) { toast(error.message, true); } finally { button.disabled = false; button.textContent = 'Evaluate manual bets'; }
+  }
   const refreshVisibleTracker = () => { if (latestTrackerData) render(latestTrackerData); };
   $('#btn-open-tracker').addEventListener('click', async () => { trackerModal.hidden = false; try { await loadTracker(); } catch (error) { toast(error.message, true); } });
+  $('#btn-batch-later-evaluation').addEventListener('click', openBatchEvaluationPreview);
+  $('#batch-evaluation-preview-list').addEventListener('change', event => { if (event.target.matches('[data-batch-evaluation-bet]')) updateBatchEvaluationSaveButton(); });
+  $('#btn-select-all-batch-evaluations').addEventListener('click', () => { document.querySelectorAll('[data-batch-evaluation-bet]').forEach(input => { input.checked = true; }); updateBatchEvaluationSaveButton(); });
+  $('#btn-save-batch-evaluations').addEventListener('click', async event => {
+    const ids = selectedBatchEvaluationIds(); if (!ids.length) return;
+    const button = event.currentTarget; button.disabled = true; button.textContent = 'Saving…';
+    try { const saved = await api('/api/tracker/bets/later-evaluations/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bet_ids: ids }) }); batchEvaluationPreviewModal.hidden = true; latestBatchEvaluationPreview = null; await loadTracker(); toast(`${saved.saved_count} later evaluation${saved.saved_count === 1 ? '' : 's'} saved.`); } catch (error) { toast(error.message, true); updateBatchEvaluationSaveButton(); }
+  });
   checkResults.addEventListener('click', async () => { checkResults.disabled = true; checkResults.textContent = 'Checking…'; try { const data = await api('/api/tracker/results/preview', { method: 'POST' }); renderResultPreview(data); refreshVisibleTracker(); toast(`Checked ${data.checked_pending} pending bet${data.checked_pending === 1 ? '' : 's'}. No results were changed.`); } catch (error) { toast(error.message, true); } finally { checkResults.disabled = false; checkResults.textContent = 'Check results'; } });
   toggleResultPreview.addEventListener('click', () => { const collapsed = resultPreview.classList.toggle('is-collapsed'); toggleResultPreview.textContent = collapsed ? 'Expand' : 'Collapse'; toggleResultPreview.setAttribute('aria-expanded', String(!collapsed)); });
   suggestionsOnly.addEventListener('click', () => { showingSuggestionsOnly = !showingSuggestionsOnly; suggestionsOnly.classList.toggle('active', showingSuggestionsOnly); suggestionsOnly.textContent = showingSuggestionsOnly ? 'Show all bets' : `Suggestions only (${latestResultPreview?.proposals.filter(item => item.status === 'proposal').length || 0})`; refreshVisibleTracker(); });

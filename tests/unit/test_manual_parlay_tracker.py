@@ -67,6 +67,19 @@ def test_manual_parlay_can_be_corrected_and_settled(client):
     assert corrected["status"] == "won"
 
 
+def test_manual_bonus_parlay_stores_cash_payout_not_non_returned_bonus_value(client):
+    response = client.post(
+        "/api/tracker/parlays/manual",
+        json=payload(decimal_odds=5.0, stake=5.0, bet_type="bonus", profit_boost_pct=0, status="won"),
+    )
+
+    assert response.status_code == 200
+    parlay = response.json()["parlay"]
+    assert parlay["winning_total_return"] == 20.0
+    assert parlay["winning_return_includes_stake"] is False
+    assert parlay["profit"] == 20.0
+
+
 def test_manual_parlay_can_mix_guided_and_free_text_legs(client):
     response = client.post(
         "/api/tracker/parlays/manual",
