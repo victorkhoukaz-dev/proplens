@@ -50,5 +50,33 @@ class ResultCacheStore:
             temporary.replace(self.path)
         return record
 
+    def get_nflverse_schedule(self) -> dict[str, str] | None:
+        with self._lock:
+            try:
+                payload = json.loads(self.path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                return None
+            record = payload.get("nflverse_schedule") if isinstance(payload, dict) else None
+            if not isinstance(record, dict) or not isinstance(record.get("content"), str):
+                return None
+            return {"content": record["content"], "fetched_at": str(record.get("fetched_at") or "")}
+
+    def save_nflverse_schedule(self, content: str) -> dict[str, str]:
+        record = {"content": content, "fetched_at": datetime.now(timezone.utc).isoformat()}
+        with self._lock:
+            data: dict[str, object] = {"version": 1, "nflverse": {}}
+            try:
+                existing = json.loads(self.path.read_text(encoding="utf-8"))
+                if isinstance(existing, dict) and existing.get("version") == 1:
+                    data = existing
+            except (OSError, json.JSONDecodeError):
+                pass
+            data["nflverse_schedule"] = record
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self.path.with_suffix(".tmp")
+            temporary.write_text(json.dumps(data, ensure_ascii=False) + "\n", encoding="utf-8")
+            temporary.replace(self.path)
+        return record
+
 
 result_cache_store = ResultCacheStore()

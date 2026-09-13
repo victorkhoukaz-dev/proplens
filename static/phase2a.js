@@ -3,6 +3,14 @@
   const $ = selector => document.querySelector(selector);
   const trackerModal = $('#tracker-modal'), saveModal = $('#save-bet-modal'), editModal = $('#edit-bet-modal'), cashoutModal = $('#cashout-modal'), laterEvaluationModal = $('#later-evaluation-modal'), laterEvaluationHistoryModal = $('#later-evaluation-history-modal'), savedEvaluationModal = $('#saved-evaluation-modal'), batchEvaluationPreviewModal = $('#batch-evaluation-preview-modal');
   const trackerList = $('#tracker-list'), trackerSummary = $('#tracker-summary'), trackerIncludePending = $('#tracker-include-pending'), trackerIncludeParlays = $('#tracker-include-parlays'), trackerSearch = $('#tracker-search'), trackerSeasonFilter = $('#tracker-season-filter'), trackerWeekFilter = $('#tracker-week-filter'), trackerActivityFilter = $('#tracker-activity-filter'), trackerStatusFilter = $('#tracker-status-filter'), trackerTypeFilter = $('#tracker-type-filter'), trackerSort = $('#tracker-sort'), trackerVisibleCount = $('#tracker-visible-count'), trackerReportContext = $('#tracker-report-context'), betType = $('#tracker-bet-type'), stake = $('#tracker-stake'), bonusHelp = $('#tracker-bonus-help'), checkResults = $('#btn-check-results'), resultPreview = $('#result-preview'), resultPreviewSummary = $('#result-preview-summary'), resultPreviewList = $('#result-preview-list'), toggleResultPreview = $('#btn-toggle-result-preview'), suggestionsOnly = $('#btn-suggestions-only');
+  const trackerGameFilter = (() => {
+    const select = document.createElement('select');
+    select.id = 'tracker-game-filter';
+    select.setAttribute('aria-label', 'Filter by matchup');
+    select.innerHTML = '<option value="all">All games</option>';
+    trackerSort.insertAdjacentElement('afterend', select);
+    return select;
+  })();
   let selectedBet = null, selectedLaterEvaluationBet = null, laterEvaluationPlayers = [], latestTrackerData = null, latestOverallSummary = null, latestResultPreview = null, latestBatchEvaluationPreview = null, showingSuggestionsOnly = false;
   const trackerShowEvaluations = (() => {
     const options = trackerIncludePending.closest('.tracker-summary-options');
@@ -20,7 +28,12 @@
   const statusLabel = bet => bet.status === 'cashed_out' ? `Cashed out · ${money(bet.settlement_amount)} received` : bet.status === 'cancelled' ? 'Cancelled before start' : bet.status[0].toUpperCase() + bet.status.slice(1);
   async function api(url, options) { const response = await fetch(url, options); const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data.detail || 'Something went wrong.'); return data; }
 
-  function activityForBet(bet) { return { ...bet, activity_type: 'straight', game_season: bet.result_identity?.season ?? null, game_week: bet.result_identity?.week ?? null, activity_search: `${bet.description || ''} ${bet.player_name} ${bet.market} ${bet.category || ''} ${bet.position || ''} ${bet.team || ''} ${bet.opponent || ''}`, activity_sort_name: bet.description || bet.player_name }; }
+  function gameFilterOption(team, opponent) {
+    const teams = [team, opponent].map(value => String(value || '').trim().toUpperCase()).filter(Boolean);
+    if (teams.length !== 2) return null;
+    return { key: teams.slice().sort().join('|'), label: `${teams[0]} vs ${teams[1]}` };
+  }
+  function activityForBet(bet) { const game = gameFilterOption(bet.team, bet.opponent); return { ...bet, activity_type: 'straight', activity_games: game ? [game.key] : [], game_season: bet.result_identity?.season ?? null, game_week: bet.result_identity?.week ?? null, activity_search: `${bet.description || ''} ${bet.player_name} ${bet.market} ${bet.category || ''} ${bet.position || ''} ${bet.team || ''} ${bet.opponent || ''}`, activity_sort_name: bet.description || bet.player_name }; }
   function parlayWeekContext(parlay) {
     if (parlay.season !== null && parlay.season !== undefined && parlay.week !== null && parlay.week !== undefined) return { season: parlay.season, week: parlay.week };
     const contexts = parlay.legs.map(leg => leg.result_identity).filter(identity => identity && Number.isInteger(Number(identity.season)) && Number.isInteger(Number(identity.week)) && Number(identity.season) >= 2020 && Number(identity.week) >= 1 && Number(identity.week) <= 25);
@@ -28,7 +41,7 @@
     const [first] = contexts;
     return contexts.every(identity => Number(identity.season) === Number(first.season) && Number(identity.week) === Number(first.week)) ? { season: first.season, week: first.week } : { season: null, week: null };
   }
-  function activityForParlay(parlay) { const context = parlayWeekContext(parlay); return { ...parlay, activity_type: 'parlay', game_season: context.season, game_week: context.week, activity_search: `${parlay.description || ''} ${parlay.legs.map(leg => `${leg.description || ''} ${leg.player_name} ${leg.market} ${leg.team || ''} ${leg.opponent || ''}`).join(' ')}`, activity_sort_name: parlay.description || parlay.legs[0]?.player_name || 'Parlay' }; }
+  function activityForParlay(parlay) { const context = parlayWeekContext(parlay); return { ...parlay, activity_type: 'parlay', activity_games: parlay.legs.map(leg => gameFilterOption(leg.team, leg.opponent)?.key).filter(Boolean), game_season: context.season, game_week: context.week, activity_search: `${parlay.description || ''} ${parlay.legs.map(leg => `${leg.description || ''} ${leg.player_name} ${leg.market} ${leg.team || ''} ${leg.opponent || ''}`).join(' ')}`, activity_sort_name: parlay.description || parlay.legs[0]?.player_name || 'Parlay' }; }
   function hasWeekContext(item) { const season = Number(item.game_season), week = Number(item.game_week); return item.game_season !== null && item.game_season !== undefined && item.game_week !== null && item.game_week !== undefined && Number.isInteger(season) && Number.isInteger(week) && season >= 2020 && week >= 1 && week <= 25; }
   function reportFilteredActivity(activity) {
     const season = trackerSeasonFilter.value, week = trackerWeekFilter.value;
@@ -48,6 +61,16 @@
     const weeks = [...new Set(activity.filter(item => hasWeekContext(item) && (selectedSeason === 'all' || Number(item.game_season) === Number(selectedSeason))).map(item => Number(item.game_week)))].sort((a, b) => a - b);
     trackerWeekFilter.innerHTML = `<option value="all">All NFL weeks</option>${weeks.map(week => `<option value="${week}">Week ${week}</option>`).join('')}<option value="unassigned">Unassigned week</option>`;
     trackerWeekFilter.value = [...trackerWeekFilter.options].some(option => option.value === currentWeek) ? currentWeek : 'all';
+  }
+  function populateGameFilter(activity) {
+    const currentGame = trackerGameFilter.value, labels = new Map();
+    reportFilteredActivity(activity).forEach(item => {
+      const legs = item.activity_type === 'parlay' ? item.legs : [item];
+      legs.forEach(leg => { const game = gameFilterOption(leg.team, leg.opponent); if (game && !labels.has(game.key)) labels.set(game.key, game.label); });
+    });
+    const games = [...labels.entries()].sort(([, left], [, right]) => left.localeCompare(right));
+    trackerGameFilter.innerHTML = `<option value="all">All games</option>${games.map(([key, label]) => `<option value="${escapeHtml(key)}">${escapeHtml(label)}</option>`).join('')}`;
+    trackerGameFilter.value = [...trackerGameFilter.options].some(option => option.value === currentGame) ? currentGame : 'all';
   }
   function reportContextLabel() {
     const season = trackerSeasonFilter.value, week = trackerWeekFilter.value;
@@ -71,13 +94,14 @@
     return { pending: activity.filter(item => item.status === 'pending').length, cash_profit: cashProfit, bonus_profit: bonusProfit, total_profit: totalProfit, cash_wagered: cashWagered.reduce((total, item) => total + Number(item.stake || 0), 0), bonus_value_used: bonusWagered.reduce((total, item) => total + Number(item.stake || 0), 0), cash_roi_pct: cashStaked ? cashProfit / cashStaked * 100 : null, total_roi_on_cash_risk_pct: cashStaked ? totalProfit / cashStaked * 100 : null };
   }
   function filteredActivity(activity) {
-    const search = trackerSearch.value.trim().toLowerCase(), activityType = trackerActivityFilter.value, status = trackerStatusFilter.value, type = trackerTypeFilter.value;
+    const search = trackerSearch.value.trim().toLowerCase(), activityType = trackerActivityFilter.value, status = trackerStatusFilter.value, type = trackerTypeFilter.value, game = trackerGameFilter.value;
     return reportFilteredActivity(activity).filter(item => {
       const matchesSearch = !search || item.activity_search.toLowerCase().includes(search);
       const matchesActivity = activityType === 'all' || item.activity_type === activityType;
       const matchesStatus = status === 'all' || (status === 'settled' ? item.status !== 'pending' : item.status === status);
+      const matchesGame = game === 'all' || (item.activity_games || []).includes(game);
       const matchesSuggestions = !showingSuggestionsOnly || (item.activity_type === 'straight' && item.status === 'pending' && resultSuggestionFor(item)?.status === 'proposal');
-      return matchesSearch && matchesActivity && matchesStatus && matchesSuggestions && (type === 'all' || item.bet_type === type);
+      return matchesSearch && matchesActivity && matchesStatus && matchesGame && matchesSuggestions && (type === 'all' || item.bet_type === type);
     }).sort((a, b) => {
       if (trackerSort.value === 'pending_first' && (a.status === 'pending') !== (b.status === 'pending')) return a.status === 'pending' ? -1 : 1;
       if (trackerSort.value === 'player') return a.activity_sort_name.localeCompare(b.activity_sort_name);
@@ -137,18 +161,35 @@
     const meta = compactEvaluation ? '' : `<small>${matchup}${Number(bet.decimal_odds).toFixed(2)} · ${bet.bet_type === 'bonus' ? 'Bonus' : 'Cash'} · ${money(bet.stake)}</small>`;
     return `<article class="tracked-bet ${bet.status === 'pending' ? 'is-pending' : 'is-settled'}"><div class="bet-identity${compactEvaluation ? ' has-compact-evaluation' : ''}"${compactEvaluation ? ' style="flex-wrap:wrap"' : ''}>${origin}<strong>${escapeHtml(title)}</strong><span class="bet-prop">${escapeHtml(prop)}</span>${meta}${compactEvaluation}</div><div class="bet-status ${bet.status}"><span>${statusLabel(bet)}</span>${inlineSuggestionMarkup(bet)}${evidence}${settled ? `<strong class="${profit >= 0 ? 'positive' : 'negative'}">${profit >= 0 ? '+' : ''}${money(profit)}</strong>` : ''}</div><div class="settle-actions">${actions}</div></article>`;
   }
+  function parlayGameKey(leg) {
+    const teams = [leg.team, leg.opponent].map(team => String(team || '').trim().toUpperCase()).filter(Boolean).sort();
+    return teams.length === 2 ? teams.join('|') : null;
+  }
+  function compactParlayEvaluationMarkup(parlay) {
+    if (!trackerShowEvaluations.checked || parlay.entry_origin !== 'parlay_evaluator') return '';
+    const gameKeys = parlay.legs.map(parlayGameKey);
+    if (gameKeys.length < 2 || gameKeys.some(key => !key) || new Set(gameKeys).size !== gameKeys.length) return '';
+    const probability = Number(parlay.independent_model_probability);
+    const odds = Number(parlay.effective_decimal_odds);
+    if (!Number.isFinite(probability) || probability <= 0 || probability >= 1 || !Number.isFinite(odds) || odds <= 1) return '';
+    const fairOdds = 1 / probability, ev = (probability * odds - 1) * 100;
+    return `<small class="compact-evaluation" style="display:block;flex:0 0 100%;width:100%"><span>Cross-game model baseline</span> · Model ${modelPercent(probability)} · Fair ${fairOdds.toFixed(2)} · <b class="${ev >= 0 ? 'positive' : 'negative'}">${ev >= 0 ? '+' : ''}${ev.toFixed(2)}% EV</b></small>`;
+  }
   function parlayRowMarkup(parlay) {
     const settled = parlay.status !== 'pending', profit = Number(parlay.profit || 0), legSummary = parlay.legs.map(leg => leg.description || [leg.player_name, leg.side_label, leg.line ?? ''].filter(Boolean).join(' ')).join(' · '), week = parlayWeekContext(parlay).week;
     const label = parlay.status === 'cashed_out' ? `Cashed out · ${money(parlay.settlement_amount)} received` : parlay.status === 'cancelled' ? 'Cancelled before start' : parlay.status === 'push_adjusted' ? 'Push-adjusted' : parlay.status === 'void_adjusted' ? 'Void-adjusted' : parlay.status[0].toUpperCase() + parlay.status.slice(1);
     const mixed = parlay.entry_origin === 'mixed';
     const title = parlay.entry_origin === 'manual' || mixed ? parlay.description || `${parlay.legs.length}-leg ${mixed ? 'mixed' : 'manual'} parlay` : `${parlay.legs.length}-leg parlay`;
     const tag = mixed ? '<span class="manual-entry-tag">Mixed parlay</span>' : parlay.entry_origin === 'manual' ? '<span class="manual-entry-tag">Manual parlay</span>' : '<span class="activity-tag">Parlay</span>';
-    return `<article class="tracked-bet tracked-parlay-activity ${parlay.status === 'pending' ? 'is-pending' : 'is-settled'}"><div class="bet-identity"><strong>${tag}${escapeHtml(title)}</strong><span class="bet-prop">${Number(parlay.effective_decimal_odds).toFixed(2)} odds</span><small>${week ? `W${escapeHtml(week)} · ` : ''}${escapeHtml(legSummary)} · ${parlay.bet_type === 'bonus' ? 'Bonus' : 'Cash'} · ${money(parlay.stake)}</small></div><div class="bet-status ${parlay.status}"><span>${label}</span>${settled ? `<strong class="${profit >= 0 ? 'positive' : 'negative'}">${profit >= 0 ? '+' : ''}${money(profit)}</strong>` : ''}</div><div class="settle-actions"><button data-open-parlay-tracker="true">Open parlay</button></div></article>`;
+    const compactEvaluation = compactParlayEvaluationMarkup(parlay);
+    const meta = compactEvaluation ? '' : `<small>${week ? `W${escapeHtml(week)} · ` : ''}${escapeHtml(legSummary)} · ${parlay.bet_type === 'bonus' ? 'Bonus' : 'Cash'} · ${money(parlay.stake)}</small>`;
+    return `<article class="tracked-bet tracked-parlay-activity ${parlay.status === 'pending' ? 'is-pending' : 'is-settled'}"><div class="bet-identity${compactEvaluation ? ' has-compact-evaluation' : ''}"${compactEvaluation ? ' style="flex-wrap:wrap"' : ''}><strong>${tag}${escapeHtml(title)}</strong><span class="bet-prop">${Number(parlay.effective_decimal_odds).toFixed(2)} odds</span>${meta}${compactEvaluation}</div><div class="bet-status ${parlay.status}"><span>${label}</span>${settled ? `<strong class="${profit >= 0 ? 'positive' : 'negative'}">${profit >= 0 ? '+' : ''}${money(profit)}</strong>` : ''}</div><div class="settle-actions"><button data-open-parlay-tracker="true">Open parlay</button></div></article>`;
   }
   function render(data) {
     latestTrackerData = data; window.proplensTrackedBets = data.bets;
     const activity = [...data.bets.map(activityForBet), ...(trackerIncludeParlays.checked ? data.parlays.map(activityForParlay) : [])];
     populateWeekFilters(activity);
+    populateGameFilter(activity);
     const reportActivity = reportFilteredActivity(activity);
     const s = summarizeActivity(reportActivity);
     latestOverallSummary = s;
@@ -301,7 +342,7 @@
   trackerIncludeParlays.addEventListener('change', () => { trackerActivityFilter.value = trackerIncludeParlays.checked ? 'all' : 'straight'; loadTracker().catch(error => toast(error.message, true)); });
   trackerSeasonFilter.addEventListener('change', () => { trackerWeekFilter.value = 'all'; refreshVisibleTracker(); });
   trackerWeekFilter.addEventListener('change', refreshVisibleTracker);
-  [trackerSearch, trackerActivityFilter, trackerStatusFilter, trackerTypeFilter, trackerSort].forEach(control => control.addEventListener('input', refreshVisibleTracker));
+  [trackerSearch, trackerActivityFilter, trackerStatusFilter, trackerTypeFilter, trackerSort, trackerGameFilter].forEach(control => control.addEventListener('input', refreshVisibleTracker));
   $('#btn-start-later-evaluation').addEventListener('click', () => {
     const player = laterEvaluationPlayers[Number($('#later-evaluation-player').value)];
     if (!selectedLaterEvaluationBet || !player) return toast('Choose the imported player before evaluating.', true);

@@ -111,6 +111,12 @@ class ProjectionSnapshotStore:
             ordered = sorted(snapshots, key=lambda item: item.imported_at, reverse=True)
             return {"active_id": active_id, "snapshots": [item.summary(active_id) for item in ordered]}
 
+    def list(self) -> list[ProjectionSnapshot]:
+        """Return immutable saved imports in chronological order for research use."""
+        with self._lock:
+            _, snapshots = self._read()
+            return sorted(snapshots, key=lambda item: item.imported_at)
+
     def create(self, projections: list[PlayerProjection], *, label: str, source: str, season: int, week: int) -> ProjectionSnapshot:
         if not projections:
             raise ValueError("Cannot save an empty projection snapshot.")

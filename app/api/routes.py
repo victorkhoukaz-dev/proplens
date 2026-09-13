@@ -34,6 +34,7 @@ from app.db.projection_snapshot_store import (
 from app.db.raw_odds_snapshot_store import raw_odds_snapshot_store
 from app.db.settings_store import settings_store
 from app.services.result_preview import SUPPORTED_MARKETS, result_preview_service
+from app.services.model_research import ModelResearchError, model_research_service
 from app.schemas.ev import MatchedEVOpportunity, PropBreakdown
 from app.schemas.projections import PlayerProjection, Position, StatCategory
 from app.schemas.odds import (
@@ -963,6 +964,19 @@ def _save_projection_import(
 @router.get("/projection-library")
 def get_projection_library() -> dict[str, Any]:
     return projection_snapshot_store.list_summaries()
+
+
+@router.get("/research/mean-accuracy")
+def get_mean_accuracy_research(
+    season: int | None = Query(default=None, ge=2020, le=2100),
+    through_week: int | None = Query(default=None, ge=1, le=25),
+    refresh: bool = False,
+) -> dict[str, Any]:
+    """Read-only Phase 5.0 report from saved projection snapshots and final NFL stats."""
+    try:
+        return model_research_service.report(season=season, through_week=through_week, refresh=refresh)
+    except ModelResearchError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @router.post("/projection-library/{snapshot_id}/activate")
