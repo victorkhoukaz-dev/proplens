@@ -17,6 +17,8 @@ THRESHOLD_MARKETS: tuple[StatCategory, ...] = (
     StatCategory.RECEPTIONS,
 )
 
+ANYTIME_TD_MARKET = StatCategory.ANYTIME_TD
+
 
 def _distribution(projection: PlayerProjection, line: float):
     if projection.stat_category.is_continuous:
@@ -79,4 +81,27 @@ def thresholds_for_projection(projection: PlayerProjection, decimal_odds: float)
         "projection_mean": round(projection.projection_mean, 2),
         "over_max_positive_line": max(positive_over) if positive_over else None,
         "under_min_positive_line": min(positive_under) if positive_under else None,
+    }
+
+
+def anytime_td_watch_for_projection(projection: PlayerProjection) -> dict[str, Any]:
+    """Return the model probability and break-even price for an Anytime TD Yes bet.
+
+    Bet365's Anytime TD market is one-sided: there is a Yes price and no
+    practical No selection to scan. The fair decimal price is the boundary;
+    a live price strictly above it is model-positive before rounding.
+    """
+    if projection.stat_category != ANYTIME_TD_MARKET:
+        raise ValueError("This row is not an Anytime TD projection.")
+
+    distribution = _distribution(projection, 0.5)
+    return {
+        "player_name": projection.canonical_name or projection.player_name,
+        "team": projection.team,
+        "opponent": projection.opponent,
+        "position": projection.position,
+        "market": projection.stat_category.value,
+        "projection_mean": round(projection.projection_mean, 2),
+        "model_probability": distribution.conditional_prob_over,
+        "minimum_decimal_odds": distribution.fair_decimal_over,
     }

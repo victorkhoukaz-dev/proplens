@@ -149,6 +149,29 @@ def test_threshold_board_boundaries_agree_with_manual_evaluator(client):
     assert under_below_boundary["value"]["is_positive"] is False
 
 
+def test_anytime_td_board_reports_model_probability_and_break_even_price(client):
+    response = client.get(
+        "/api/evaluator/threshold-board",
+        params={"game": "BUF|KC", "market": "anytime_td", "odds": 1.86},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["mode"] == "anytime_td"
+    assert len(data["rows"]) == 1
+    row = data["rows"][0]
+    assert row["player_name"] == "Travis Kelce"
+    assert 0 < row["model_probability"] < 1
+    assert row["minimum_decimal_odds"] > 1
+
+    manual = client.post(
+        "/api/evaluator/evaluate",
+        json={"player_name": "Travis Kelce", "stat_category": "anytime_td", "side": "yes", "line": 0.5, "odds": 2.5},
+    )
+    assert manual.status_code == 200
+    assert manual.json()["model"]["win_probability"] == pytest.approx(row["model_probability"], abs=0.0005)
+    assert manual.json()["model"]["fair_decimal"] == row["minimum_decimal_odds"]
+
+
 def test_anytime_touchdown_requires_yes_selection(client):
     response = client.post(
         "/api/evaluator/evaluate",

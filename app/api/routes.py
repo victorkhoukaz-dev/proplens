@@ -46,7 +46,7 @@ from app.schemas.odds import (
 )
 from app.services.ev_pipeline import pipeline_service
 from app.services.screenshot_ocr import ScreenshotOCRError, SUPPORTED_MARKETS as SCREENSHOT_MARKETS, extract_screenshot
-from app.services.threshold_board import THRESHOLD_MARKETS, thresholds_for_projection
+from app.services.threshold_board import ANYTIME_TD_MARKET, THRESHOLD_MARKETS, anytime_td_watch_for_projection, thresholds_for_projection
 
 logger = logging.getLogger(__name__)
 
@@ -1113,8 +1113,8 @@ def projection_threshold_board(
         stat_category = StatCategory(market)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Choose a supported threshold-board market.") from exc
-    if stat_category not in THRESHOLD_MARKETS:
-        raise HTTPException(status_code=400, detail="Anytime TD is a Yes-price market and is not on the two-sided threshold board yet.")
+    if stat_category not in THRESHOLD_MARKETS and stat_category != ANYTIME_TD_MARKET:
+        raise HTTPException(status_code=400, detail="Choose a supported Threshold Board market.")
 
     normalized_game = game.strip().upper()
 
@@ -1132,12 +1132,19 @@ def projection_threshold_board(
 
     selected = [
         projection for projection in projections
-        if projection.stat_category.value == stat_category.value and (normalized_game == "ALL" or game_key(projection) == normalized_game)
+        if projection.stat_category.value == stat_category.value
+        and (normalized_game == "ALL" or game_key(projection) == normalized_game)
+        # A zero TD projection has no possible positive Yes price in this
+        # model; omitting it keeps the one-sided TD board actionable.
+        and (stat_category != ANYTIME_TD_MARKET or projection.projection_mean > 0)
     ]
     rows = []
     for projection in selected:
         try:
-            rows.append(thresholds_for_projection(projection, odds))
+            if stat_category == ANYTIME_TD_MARKET:
+                rows.append(anytime_td_watch_for_projection(projection))
+            else:
+                rows.append(thresholds_for_projection(projection, odds))
         except ValueError as exc:
             logger.warning("Skipping threshold board row for %s: %s", projection.player_name, exc)
             continue
@@ -1146,6 +1153,7 @@ def projection_threshold_board(
     rows.sort(key=lambda row: (-float(row["projection_mean"]), row["player_name"].lower()))
     return {
         "success": True,
+        "mode": "anytime_td" if stat_category == ANYTIME_TD_MARKET else "two_sided",
         "assumed_decimal_odds": odds,
         "game": normalized_game,
         "market": stat_category.value,
