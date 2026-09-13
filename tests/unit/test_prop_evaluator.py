@@ -35,6 +35,15 @@ def evaluator_projections():
                 stat_category=StatCategory.ANYTIME_TD,
                 projection_mean=0.55,
             ),
+            PlayerProjection(
+                player_name="Patrick Mahomes",
+                canonical_name="Patrick Mahomes",
+                team="KC",
+                opponent="BUF",
+                position="QB",
+                stat_category=StatCategory.PASSING_YARDS,
+                projection_mean=300.0,
+            ),
         ]
     )
     yield
@@ -101,6 +110,43 @@ def test_evaluator_handles_a_low_yardage_line_without_invalid_fair_price(client)
     assert response.status_code == 200
     assert response.json()["model"]["fair_decimal"] == 1.0
     assert response.json()["model"]["fair_american"] is None
+
+
+def test_threshold_board_boundaries_agree_with_manual_evaluator(client):
+    board = client.get(
+        "/api/evaluator/threshold-board",
+        params={"game": "BUF|KC", "market": "passing_yards", "odds": 1.86},
+    )
+    assert board.status_code == 200
+    rows = board.json()["rows"]
+    assert [row["player_name"] for row in rows] == ["Patrick Mahomes", "Josh Allen"]
+    row = next(row for row in rows if row["player_name"] == "Josh Allen")
+    assert row["player_name"] == "Josh Allen"
+    assert row["over_max_positive_line"] is not None
+    assert row["under_min_positive_line"] is not None
+
+    over_at_boundary = client.post(
+        "/api/evaluator/evaluate",
+        json={"player_name": "Josh Allen", "stat_category": "passing_yards", "side": "over", "line": row["over_max_positive_line"], "odds": 1.86},
+    ).json()
+    over_past_boundary = client.post(
+        "/api/evaluator/evaluate",
+        # The board scans the standard half-point prop ladder. The next
+        # candidate after 242.5 is 243.5, not the integer 243.0.
+        json={"player_name": "Josh Allen", "stat_category": "passing_yards", "side": "over", "line": row["over_max_positive_line"] + 1.0, "odds": 1.86},
+    ).json()
+    under_at_boundary = client.post(
+        "/api/evaluator/evaluate",
+        json={"player_name": "Josh Allen", "stat_category": "passing_yards", "side": "under", "line": row["under_min_positive_line"], "odds": 1.86},
+    ).json()
+    under_below_boundary = client.post(
+        "/api/evaluator/evaluate",
+        json={"player_name": "Josh Allen", "stat_category": "passing_yards", "side": "under", "line": row["under_min_positive_line"] - 1.0, "odds": 1.86},
+    ).json()
+    assert over_at_boundary["value"]["is_positive"] is True
+    assert over_past_boundary["value"]["is_positive"] is False
+    assert under_at_boundary["value"]["is_positive"] is True
+    assert under_below_boundary["value"]["is_positive"] is False
 
 
 def test_anytime_touchdown_requires_yes_selection(client):

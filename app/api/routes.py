@@ -45,6 +45,8 @@ from app.schemas.odds import (
     OutcomeType,
 )
 from app.services.ev_pipeline import pipeline_service
+from app.services.screenshot_ocr import ScreenshotOCRError, SUPPORTED_MARKETS as SCREENSHOT_MARKETS, extract_screenshot
+from app.services.threshold_board import THRESHOLD_MARKETS, thresholds_for_projection
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +147,34 @@ class PropEvaluationRequest(BaseModel):
         if value is not None and value < 0:
             raise ValueError("Stake cannot be negative.")
         return value
+
+
+@router.post("/screenshot-batches/extract")
+async def extract_screenshot_batch(
+    files: list[UploadFile] = File(...),
+    game: str = Form(..., min_length=3, max_length=80),
+    market: str = Form(..., min_length=3, max_length=40),
+) -> dict[str, Any]:
+    """Read manually supplied screenshots locally; never persists screenshots or bets."""
+    if market not in SCREENSHOT_MARKETS:
+        raise HTTPException(status_code=400, detail="Choose a supported evaluator market for this pilot.")
+    if not files or len(files) > 8:
+        raise HTTPException(status_code=400, detail="Upload between 1 and 8 screenshots in one batch.")
+    screenshots = []
+    for file in files:
+        try:
+            screenshots.append(extract_screenshot(await file.read(), file.filename or "screenshot.png"))
+        except ScreenshotOCRError as exc:
+            raise HTTPException(status_code=400, detail=f"{file.filename or 'Screenshot'}: {exc}") from exc
+    rows = [row for screenshot in screenshots for row in screenshot["rows"]]
+    return {
+        "success": True,
+        "game": game.strip(),
+        "market": market,
+        "screenshots": screenshots,
+        "row_count": len(rows),
+        "notice": "Review every row before later evaluation. Screenshots and extracted rows were not saved.",
+    }
 
 
 class TrackedBetCreateRequest(BaseModel):
@@ -1069,6 +1099,59 @@ def browse_evaluator_players(
         "games": [{"key": key, "label": label} for key, label in sorted(games.items(), key=lambda item: item[1])],
         "sort_market": sort_market,
         "projection_context": active_context,
+    }
+
+
+@router.get("/evaluator/threshold-board")
+def projection_threshold_board(
+    game: str = Query("all", max_length=30),
+    market: str = Query("receiving_yards", max_length=40),
+    odds: float = Query(1.86, gt=1.0, le=100.0),
+) -> dict[str, Any]:
+    """Return a projection-only Bet365 line watchlist; never fetches bookmaker odds."""
+    try:
+        stat_category = StatCategory(market)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Choose a supported threshold-board market.") from exc
+    if stat_category not in THRESHOLD_MARKETS:
+        raise HTTPException(status_code=400, detail="Anytime TD is a Yes-price market and is not on the two-sided threshold board yet.")
+
+    normalized_game = game.strip().upper()
+
+    def game_key(projection: PlayerProjection) -> str | None:
+        if not projection.team or not projection.opponent:
+            return None
+        return "|".join(sorted((projection.team.upper(), projection.opponent.upper())))
+
+    projections = cache.get_projections()
+    games: dict[str, str] = {}
+    for projection in projections:
+        key = game_key(projection)
+        if key:
+            games.setdefault(key, f"{projection.team.upper()} vs {projection.opponent.upper()}")
+
+    selected = [
+        projection for projection in projections
+        if projection.stat_category.value == stat_category.value and (normalized_game == "ALL" or game_key(projection) == normalized_game)
+    ]
+    rows = []
+    for projection in selected:
+        try:
+            rows.append(thresholds_for_projection(projection, odds))
+        except ValueError as exc:
+            logger.warning("Skipping threshold board row for %s: %s", projection.player_name, exc)
+            continue
+    # A market is easiest to scan from the largest projected volume down.
+    # Keep a stable secondary order for players tied on the same projection.
+    rows.sort(key=lambda row: (-float(row["projection_mean"]), row["player_name"].lower()))
+    return {
+        "success": True,
+        "assumed_decimal_odds": odds,
+        "game": normalized_game,
+        "market": stat_category.value,
+        "games": [{"key": key, "label": label} for key, label in sorted(games.items(), key=lambda item: item[1])],
+        "rows": rows,
+        "notice": "Projection-only watchlist. Check the exact live Bet365 line and odds before evaluating a bet.",
     }
 
 
