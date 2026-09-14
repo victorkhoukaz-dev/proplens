@@ -1488,6 +1488,141 @@ def _later_evaluation_snapshot(evaluation: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _evaluation_refresh_snapshot(evaluation: dict[str, Any]) -> dict[str, Any]:
+    """Create a timestamped, post-placement model snapshot; the original evaluation is untouched."""
+    snapshot = _later_evaluation_snapshot(evaluation)
+    snapshot["kind"] = "evaluation_refresh"
+    return snapshot
+
+
+def _evaluate_pending_bet_for_refresh(bet: dict[str, Any]) -> dict[str, Any]:
+    """Evaluate a pending tracked player prop against the active projection set without mutating it."""
+    if bet.get("entry_origin") == "manual" and bet.get("category") != "player_prop":
+        raise HTTPException(status_code=400, detail="Only manual player props can be refreshed with imported projections.")
+    if bet.get("entry_origin") not in {"manual", "evaluated"}:
+        raise HTTPException(status_code=400, detail="This tracked entry does not have a compatible saved player prop.")
+    copied = {**bet, "entry_origin": "manual", "category": "player_prop"}
+    return _evaluate_later_manual_bet(copied, str(bet.get("player_name") or ""))
+
+
+def _refresh_comparison_baseline(bet: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the most recent saved model state for refresh change detection."""
+    refreshes = list(bet.get("evaluation_refreshes") or [])
+    if refreshes:
+        snapshot = refreshes[-1]
+        return {**snapshot, "comparison_label": "Last saved refresh"}
+
+    later_evaluations = list(bet.get("later_evaluations") or [])
+    if later_evaluations:
+        snapshot = later_evaluations[-1]
+        return {**snapshot, "comparison_label": "Last later evaluation"}
+
+    if bet.get("entry_origin") == "evaluated":
+        return {
+            "kind": "original_evaluation",
+            "comparison_label": "Placed evaluation",
+            "projection": {"mean": bet.get("projection_mean")},
+            "model": {
+                "win_probability": bet.get("model_win_probability"),
+                "fair_decimal": bet.get("model_fair_decimal"),
+            },
+            "value": {"expected_value_pct": bet.get("expected_value_pct")},
+        }
+    return None
+
+
+def _evaluation_differs_from_baseline(evaluation: dict[str, Any], baseline: dict[str, Any] | None) -> bool:
+    """Treat an unsnapshotted manual bet as new; otherwise compare actual saved model values."""
+    if baseline is None:
+        return True
+
+    current_values = (
+        evaluation.get("projection", {}).get("mean"),
+        evaluation.get("model", {}).get("win_probability"),
+        evaluation.get("model", {}).get("fair_decimal"),
+        evaluation.get("value", {}).get("expected_value_pct"),
+    )
+    saved_values = (
+        baseline.get("projection", {}).get("mean"),
+        baseline.get("model", {}).get("win_probability"),
+        baseline.get("model", {}).get("fair_decimal"),
+        baseline.get("value", {}).get("expected_value_pct"),
+    )
+    for current, saved in zip(current_values, saved_values):
+        if current is None or saved is None:
+            return current != saved
+        if abs(float(current) - float(saved)) > 1e-9:
+            return True
+    return False
+
+
+@router.post("/tracker/bets/evaluation-refreshes/preview")
+def preview_evaluation_refreshes() -> dict[str, Any]:
+    """Preview only pending player props whose current model differs from their last saved state."""
+    items: list[dict[str, Any]] = []
+    unchanged = 0
+    candidates = [
+        bet for bet in bet_tracker_store.list()
+        if bet.get("status") == "pending" and (bet.get("entry_origin") == "evaluated" or (bet.get("entry_origin") == "manual" and bet.get("category") == "player_prop"))
+    ]
+    for bet in candidates:
+        item: dict[str, Any] = {
+            "bet_id": bet["id"], "player_name": bet.get("player_name"), "team": bet.get("team"), "opponent": bet.get("opponent"),
+            "market": bet.get("market"), "side_label": bet.get("side_label"), "line": bet.get("line"), "decimal_odds": bet.get("decimal_odds"),
+            "has_original_evaluation": bet.get("entry_origin") == "evaluated",
+            "refresh_count": len(bet.get("evaluation_refreshes") or []),
+        }
+        baseline = _refresh_comparison_baseline(bet)
+        try:
+            evaluation = _evaluate_pending_bet_for_refresh(bet)
+        except HTTPException as exc:
+            items.append({**item, "status": "needs_review", "message": str(exc.detail)})
+            continue
+        if not _evaluation_differs_from_baseline(evaluation, baseline):
+            unchanged += 1
+            continue
+        items.append({
+            **item, "status": "ready", "projection": evaluation["projection"], "model": evaluation["model"],
+            "value": {"expected_value_pct": evaluation["value"]["expected_value_pct"], "entered_stake_expected_profit": evaluation["value"]["entered_stake_expected_profit"]},
+            "projection_snapshot_label": evaluation["result_identity"].get("projection_snapshot_label"), "baseline": baseline,
+        })
+    ready = [item for item in items if item["status"] == "ready"]
+    ready.sort(key=lambda item: float(item["value"]["expected_value_pct"]), reverse=True)
+    not_ready = [item for item in items if item["status"] != "ready"]
+    return {"success": True, "projection_context": _active_projection_context(), "checked": len(candidates), "changed": len(ready), "unchanged": unchanged, "needs_review": len(not_ready), "items": [*ready, *not_ready]}
+
+
+@router.post("/tracker/bets/evaluation-refreshes/save")
+def save_evaluation_refreshes(payload: BatchLaterEvaluationSaveRequest) -> dict[str, Any]:
+    """Save selected updated snapshots atomically while preserving the immutable pre-bet evaluation."""
+    by_id = {bet["id"]: bet for bet in bet_tracker_store.list()}
+    snapshots: dict[str, dict[str, Any]] = {}
+    errors: list[str] = []
+    for bet_id in payload.bet_ids:
+        bet = by_id.get(bet_id)
+        if bet is None:
+            errors.append("A selected bet no longer exists.")
+            continue
+        if bet.get("status") != "pending":
+            errors.append(f"{bet.get('player_name') or 'A selected bet'} is no longer pending.")
+            continue
+        try:
+            evaluation = _evaluate_pending_bet_for_refresh(bet)
+            if not _evaluation_differs_from_baseline(evaluation, _refresh_comparison_baseline(bet)):
+                errors.append(f"{bet.get('player_name') or 'A selected bet'} no longer has a projection-model change to save.")
+                continue
+            snapshots[bet_id] = _evaluation_refresh_snapshot(evaluation)
+        except HTTPException as exc:
+            errors.append(f"{bet.get('player_name') or 'A selected bet'}: {exc.detail}")
+    if errors:
+        raise HTTPException(status_code=409, detail="Nothing was saved. Refresh the preview and review: " + " ".join(errors))
+    try:
+        saved = bet_tracker_store.append_evaluation_refreshes(snapshots)
+    except TrackedBetNotFoundError as exc:
+        raise HTTPException(status_code=409, detail="Nothing was saved because a selected bet changed. Refresh the preview and try again.") from exc
+    return {"success": True, "saved_count": len(saved), "bets": saved}
+
+
 @router.post("/tracker/bets/later-evaluations/preview")
 def preview_later_evaluations() -> dict[str, Any]:
     """Preview safe batch later evaluations without writing to the tracker."""

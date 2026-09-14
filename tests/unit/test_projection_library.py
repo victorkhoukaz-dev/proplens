@@ -214,6 +214,85 @@ def test_manual_bet_can_receive_immutable_later_evaluation(client):
     assert reloaded["later_evaluations"][0]["projection_snapshot_label"] == "Saturday projections"
 
 
+def test_pending_evaluated_bet_can_save_updated_projection_without_replacing_pre_bet_snapshot(client):
+    client.post(
+        "/api/upload/paste",
+        json={"data_type": "projections", "content": projection_text(70.5), "season": 2026, "week": 1, "label": "Placed projection"},
+    )
+    evaluation = client.post(
+        "/api/evaluator/evaluate",
+        json={"player_name": "Saquon Barkley", "stat_category": "rushing_yards", "side": "over", "line": 70.0, "odds": 1.9},
+    ).json()
+    prop, projection, model, value = evaluation["prop"], evaluation["projection"], evaluation["model"], evaluation["value"]
+    saved = client.post(
+        "/api/tracker/bets",
+        json={
+            "player_name": prop["player_name"], "team": prop["team"], "opponent": prop["opponent"], "market": prop["market"],
+            "side_label": prop["side_label"], "line": prop["line"], "decimal_odds": prop["bet365_decimal"], "stake": 5, "bet_type": "cash",
+            "projection_mean": projection["mean"], "model_win_probability": model["win_probability"], "model_fair_decimal": model["fair_decimal"],
+            "expected_value_pct": value["expected_value_pct"], "result_identity": evaluation["result_identity"],
+        },
+    ).json()["bet"]
+    original_projection = saved["projection_mean"]
+
+    client.post(
+        "/api/upload/paste",
+        json={"data_type": "projections", "content": projection_text(64.0), "season": 2026, "week": 1, "label": "Updated projection"},
+    )
+    preview = client.post("/api/tracker/bets/evaluation-refreshes/preview")
+    assert preview.status_code == 200
+    item = preview.json()["items"][0]
+    assert item["bet_id"] == saved["id"]
+    assert item["baseline"]["comparison_label"] == "Placed evaluation"
+    assert item["baseline"]["projection"]["mean"] == original_projection
+    assert item["projection"]["mean"] == 64.0
+
+    refreshed = client.post("/api/tracker/bets/evaluation-refreshes/save", json={"bet_ids": [saved["id"]]})
+    assert refreshed.status_code == 200
+    stored = client.get("/api/tracker/bets").json()["bets"][0]
+    assert stored["projection_mean"] == original_projection
+    assert stored["result_identity"]["projection_snapshot_label"] == "Placed projection"
+    assert len(stored["evaluation_refreshes"]) == 1
+    assert stored["evaluation_refreshes"][0]["kind"] == "evaluation_refresh"
+    assert stored["evaluation_refreshes"][0]["projection_snapshot_label"] == "Updated projection"
+    assert stored["evaluation_refreshes"][0]["projection"]["mean"] == 64.0
+
+
+def test_refresh_preview_only_returns_bets_changed_since_their_latest_saved_model_snapshot(client):
+    client.post(
+        "/api/upload/paste",
+        json={"data_type": "projections", "content": projection_text(70.5), "season": 2026, "week": 1, "label": "Initial projection"},
+    )
+    manual = client.post(
+        "/api/tracker/bets/manual",
+        json={
+            "category": "player_prop", "description": "Saquon Barkley Over 70", "player_name": "Saquon Barkley",
+            "team": "PHI", "opponent": "DAL", "market": "rushing_yards", "side_label": "Over",
+            "line": 70, "decimal_odds": 1.9, "stake": 5, "bet_type": "cash", "season": 2026, "week": 1,
+        },
+    ).json()["bet"]
+    initial = client.post("/api/tracker/bets/later-evaluations/save", json={"bet_ids": [manual["id"]]})
+    assert initial.status_code == 200
+
+    unchanged = client.post("/api/tracker/bets/evaluation-refreshes/preview").json()
+    assert unchanged["checked"] == 1
+    assert unchanged["changed"] == 0
+    assert unchanged["unchanged"] == 1
+    assert unchanged["items"] == []
+
+    client.post(
+        "/api/upload/paste",
+        json={"data_type": "projections", "content": projection_text(64.0), "season": 2026, "week": 1, "label": "Changed projection"},
+    )
+    changed = client.post("/api/tracker/bets/evaluation-refreshes/preview").json()
+    assert changed["changed"] == 1
+    item = changed["items"][0]
+    assert item["bet_id"] == manual["id"]
+    assert item["baseline"]["comparison_label"] == "Last later evaluation"
+    assert item["baseline"]["projection"]["mean"] == 70.5
+    assert item["projection"]["mean"] == 64.0
+
+
 def test_batch_later_evaluation_preview_returns_ready_and_review_without_writing(client):
     client.post(
         "/api/upload/paste",

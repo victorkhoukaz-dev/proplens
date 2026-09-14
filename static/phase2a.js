@@ -19,6 +19,10 @@
     options.prepend(label);
     return label.querySelector('input');
   })();
+  $('#btn-batch-later-evaluation').textContent = 'Refresh pending models';
+  $('#batch-evaluation-preview-title').textContent = 'Refresh pending models';
+  batchEvaluationPreviewModal.querySelector('.eyebrow').textContent = 'UPDATED PROJECTIONS · READ ONLY PREVIEW';
+  batchEvaluationPreviewModal.querySelector('.later-evaluation-note').textContent = 'Saving creates timestamped updates only. It never replaces the original pre-bet evaluation, line, odds, or tracked wager.';
   const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
   const money = value => `$${Number(value || 0).toFixed(2)}`;
   const percent = value => value === null || value === undefined ? '—' : `${Number(value).toFixed(1)}%`;
@@ -129,9 +133,9 @@
   function compactEvaluationMarkup(bet) {
     if (!trackerShowEvaluations.checked) return '';
     const original = bet.entry_origin === 'evaluated';
-    const snapshots = bet.later_evaluations || [];
-    if (!original && !snapshots.length) return '';
-    const snapshot = original ? { projection: { mean: bet.projection_mean }, model: { win_probability: bet.model_win_probability, fair_decimal: bet.model_fair_decimal }, value: { expected_value_pct: bet.expected_value_pct }, label: 'Original evaluation' } : { ...snapshots[snapshots.length - 1], label: snapshots.length > 1 ? `Latest later evaluation · ${snapshots.length} saved` : 'Later evaluation' };
+    const laterSnapshots = bet.later_evaluations || [], refreshes = bet.evaluation_refreshes || [];
+    if (!original && !laterSnapshots.length && !refreshes.length) return '';
+    const snapshot = refreshes.length ? { ...refreshes[refreshes.length - 1], label: refreshes.length > 1 ? `Latest projection update · ${refreshes.length} saved` : 'Updated after placement' } : original ? { projection: { mean: bet.projection_mean }, model: { win_probability: bet.model_win_probability, fair_decimal: bet.model_fair_decimal }, value: { expected_value_pct: bet.expected_value_pct }, label: 'Original evaluation' } : { ...laterSnapshots[laterSnapshots.length - 1], label: laterSnapshots.length > 1 ? `Latest later evaluation · ${laterSnapshots.length} saved` : 'Later evaluation' };
     const projection = Number(snapshot.projection?.mean), probability = Number(snapshot.model?.win_probability), fairOdds = Number(snapshot.model?.fair_decimal), ev = Number(snapshot.value?.expected_value_pct);
     const evText = Number.isFinite(ev) ? `${ev >= 0 ? '+' : ''}${ev.toFixed(2)}% EV` : 'EV —';
     return `<small class="compact-evaluation" style="display:block;flex:0 0 100%;width:100%"><span>${escapeHtml(snapshot.label)}</span> · Projection ${Number.isFinite(projection) ? projection.toFixed(1) : '—'} · Model ${modelPercent(probability)} · Fair ${Number.isFinite(fairOdds) ? fairOdds.toFixed(2) : '—'} · <b class="${ev >= 0 ? 'positive' : 'negative'}">${evText}</b></small>`;
@@ -139,8 +143,9 @@
   function moreActions(bet, includeManualOutcomes = false) {
     const pendingActions = bet.status === 'pending' ? `${includeManualOutcomes ? `<button data-settle="won" data-bet-id="${bet.id}">Won</button><button data-settle="lost" data-bet-id="${bet.id}">Lost</button>` : ''}<button data-settle="push" data-bet-id="${bet.id}">Push</button><button data-cancel="${bet.id}">Cancel before start</button>` : '';
     const laterEvaluations = bet.later_evaluations || [];
+    const refreshes = bet.evaluation_refreshes || [];
     const laterEvaluationAction = bet.entry_origin === 'manual' && bet.category === 'player_prop' ? `<button data-later-evaluate="${bet.id}">${laterEvaluations.length ? 'Evaluate again' : 'Evaluate with projections'}</button>` : '';
-    const laterHistoryAction = laterEvaluations.length ? `<button data-view-later-evaluations="${bet.id}">View later evaluation${laterEvaluations.length === 1 ? '' : 's'}</button>` : '';
+    const laterHistoryAction = laterEvaluations.length || refreshes.length ? `<button data-view-later-evaluations="${bet.id}">View evaluation history</button>` : '';
     const savedEvaluationAction = bet.entry_origin === 'evaluated' ? `<button data-view-saved-evaluation="${bet.id}">View original evaluation</button>` : '';
     const editAttribute = bet.entry_origin === 'manual' ? `data-edit-manual="${bet.id}"` : `data-edit="${bet.id}"`;
     return `<details class="row-more"><summary aria-label="More actions for ${escapeHtml(bet.player_name)}">More</summary><div class="row-more-menu"><button ${editAttribute}>Edit</button>${savedEvaluationAction}${laterEvaluationAction}${laterHistoryAction}${pendingActions}<button class="danger-action" data-delete="${bet.id}">Delete</button></div></details>`;
@@ -274,17 +279,26 @@
     laterEvaluationModal.hidden = false;
   }
   function showLaterEvaluationHistory(bet) {
-    const snapshots = bet.later_evaluations || [];
+    const originalSnapshot = bet.entry_origin === 'evaluated' ? {
+      kind: 'original_evaluation',
+      projection_snapshot_label: bet.source_context?.label || bet.result_identity?.projection_snapshot_label,
+      projection: { mean: bet.projection_mean },
+      prop: { side_label: bet.side_label, line: bet.line, market: bet.market },
+      model: { win_probability: bet.model_win_probability, fair_decimal: bet.model_fair_decimal },
+      value: { expected_value_pct: bet.expected_value_pct },
+    } : null;
+    const snapshots = [originalSnapshot, ...(bet.later_evaluations || []), ...(bet.evaluation_refreshes || [])].filter(Boolean).sort((left, right) => String(left.evaluated_at || '').localeCompare(String(right.evaluated_at || '')));
     if (!snapshots.length) return;
-    $('#later-evaluation-history-summary').textContent = `${bet.player_name} · placed manually, then evaluated ${snapshots.length} time${snapshots.length === 1 ? '' : 's'} after projections arrived.`;
+    $('#later-evaluation-history-summary').textContent = `${bet.player_name} · ${snapshots.length} saved model snapshot${snapshots.length === 1 ? '' : 's'}, newest first. The original placed evaluation is included below whenever one exists.`;
     $('#later-evaluation-history-list').innerHTML = snapshots.slice().reverse().map(snapshot => {
-      const when = snapshot.evaluated_at ? new Date(snapshot.evaluated_at).toLocaleString() : 'Saved earlier';
+      const when = snapshot.evaluated_at ? new Date(snapshot.evaluated_at).toLocaleString() : 'Saved when the bet was placed';
       const projection = Number(snapshot.projection?.mean);
       const probability = Number(snapshot.model?.win_probability);
       const fairOdds = Number(snapshot.model?.fair_decimal);
       const ev = Number(snapshot.value?.expected_value_pct);
       const prop = snapshot.prop || {};
-      return `<article class="later-evaluation-history-item"><strong>${escapeHtml(snapshot.projection_snapshot_label || 'Imported projection set')}</strong><small>${escapeHtml(when)} · ${escapeHtml(prop.side_label || '')} ${escapeHtml(prop.line ?? '')} · ${escapeHtml(marketLabel(prop.market))}</small><div><span>Projection <b>${Number.isFinite(projection) ? projection.toFixed(1) : '—'}</b></span><span>Model win <b>${modelPercent(probability)}</b></span><span>Fair odds <b>${Number.isFinite(fairOdds) ? fairOdds.toFixed(2) : '—'}</b></span><span>EV <b class="${ev >= 0 ? 'positive' : 'negative'}">${Number.isFinite(ev) ? `${ev >= 0 ? '+' : ''}${ev.toFixed(2)}%` : '—'}</b></span></div></article>`;
+      const label = snapshot.kind === 'original_evaluation' ? 'Original placed evaluation' : snapshot.kind === 'evaluation_refresh' ? 'Updated projection' : 'Later evaluation';
+      return `<article class="later-evaluation-history-item"><strong>${label} · ${escapeHtml(snapshot.projection_snapshot_label || 'Imported projection set')}</strong><small>${escapeHtml(when)} · ${escapeHtml(prop.side_label || '')} ${escapeHtml(prop.line ?? '')} · ${escapeHtml(marketLabel(prop.market))}</small><div><span>Projection <b>${Number.isFinite(projection) ? projection.toFixed(1) : '—'}</b></span><span>Model win <b>${modelPercent(probability)}</b></span><span>Fair odds <b>${Number.isFinite(fairOdds) ? fairOdds.toFixed(2) : '—'}</b></span><span>EV <b class="${ev >= 0 ? 'positive' : 'negative'}">${Number.isFinite(ev) ? `${ev >= 0 ? '+' : ''}${ev.toFixed(2)}%` : '—'}</b></span></div></article>`;
     }).join('');
     laterEvaluationHistoryModal.hidden = false;
   }
@@ -304,26 +318,29 @@
     const heading = `${item.player_name || 'Unnamed player'} · ${selection} · ${marketLabel(item.market)}`;
     if (item.status !== 'ready') return `<article class="batch-evaluation-row needs-review"><div><strong>${escapeHtml(heading)}</strong><small>${escapeHtml(item.message || 'This bet needs review before it can be evaluated.')}</small></div><span>Needs review</span></article>`;
     const projection = Number(item.projection?.mean), probability = Number(item.model?.win_probability), fairOdds = Number(item.model?.fair_decimal), ev = Number(item.value?.expected_value_pct);
-    return `<article class="batch-evaluation-row ready"><label class="batch-evaluation-select"><input type="checkbox" data-batch-evaluation-bet="${escapeHtml(item.bet_id)}" checked aria-label="Save later evaluation for ${escapeHtml(item.player_name)}"><span></span></label><div class="batch-evaluation-heading"><strong>${escapeHtml(heading)}</strong><small>${escapeHtml(item.team || '—')} vs ${escapeHtml(item.opponent || '—')} · Bet365 ${Number(item.decimal_odds).toFixed(2)}</small></div><div class="batch-evaluation-metrics"><span>Projection <b>${Number.isFinite(projection) ? projection.toFixed(1) : '—'}</b></span><span>Model win <b>${modelPercent(probability)}</b></span><span>Fair odds <b>${Number.isFinite(fairOdds) ? fairOdds.toFixed(2) : '—'}</b></span><span>EV <b class="${ev >= 0 ? 'positive' : 'negative'}">${Number.isFinite(ev) ? `${ev >= 0 ? '+' : ''}${ev.toFixed(2)}%` : '—'}</b></span></div><span class="batch-evaluation-status">Ready</span></article>`;
+    const baseline = item.baseline || {}, baselineProjection = Number(baseline.projection?.mean), baselineProbability = Number(baseline.model?.win_probability);
+    const baselineLabel = baseline.comparison_label || 'First saved model check';
+    const change = `<small>${escapeHtml(baselineLabel)}: ${Number.isFinite(baselineProjection) ? baselineProjection.toFixed(1) : '—'} projection · ${modelPercent(baselineProbability)} model → Updated: ${Number.isFinite(projection) ? projection.toFixed(1) : '—'} · ${modelPercent(probability)}</small>`;
+    return `<article class="batch-evaluation-row ready"><label class="batch-evaluation-select"><input type="checkbox" data-batch-evaluation-bet="${escapeHtml(item.bet_id)}" checked aria-label="Save updated evaluation for ${escapeHtml(item.player_name)}"><span></span></label><div class="batch-evaluation-heading"><strong>${escapeHtml(heading)}</strong><small>${escapeHtml(item.team || '—')} vs ${escapeHtml(item.opponent || '—')} · Bet365 ${Number(item.decimal_odds).toFixed(2)}</small>${change}</div><div class="batch-evaluation-metrics"><span>Projection <b>${Number.isFinite(projection) ? projection.toFixed(1) : '—'}</b></span><span>Model win <b>${modelPercent(probability)}</b></span><span>Fair odds <b>${Number.isFinite(fairOdds) ? fairOdds.toFixed(2) : '—'}</b></span><span>EV <b class="${ev >= 0 ? 'positive' : 'negative'}">${Number.isFinite(ev) ? `${ev >= 0 ? '+' : ''}${ev.toFixed(2)}%` : '—'}</b></span></div><span class="batch-evaluation-status">Ready</span></article>`;
   }
   function selectedBatchEvaluationIds() { return [...document.querySelectorAll('[data-batch-evaluation-bet]:checked')].map(input => input.dataset.batchEvaluationBet); }
   function updateBatchEvaluationSaveButton() {
     const ids = selectedBatchEvaluationIds(), button = $('#btn-save-batch-evaluations');
     button.disabled = !ids.length;
-    button.textContent = ids.length ? `Save ${ids.length} selected evaluation${ids.length === 1 ? '' : 's'}` : 'Save selected evaluations';
+    button.textContent = ids.length ? `Save ${ids.length} selected update${ids.length === 1 ? '' : 's'}` : 'Save selected updates';
   }
   async function openBatchEvaluationPreview() {
     const button = $('#btn-batch-later-evaluation');
-    button.disabled = true; button.textContent = 'Evaluating…';
+    button.disabled = true; button.textContent = 'Refreshing…';
     try {
-      const preview = await api('/api/tracker/bets/later-evaluations/preview', { method: 'POST' });
+      const preview = await api('/api/tracker/bets/evaluation-refreshes/preview', { method: 'POST' });
       latestBatchEvaluationPreview = preview;
       const context = preview.projection_context?.label || 'the active projection set';
-      $('#batch-evaluation-preview-summary').textContent = `${preview.ready} ready · ${preview.needs_review} need review · checked against ${context}.`;
-      $('#batch-evaluation-preview-list').innerHTML = preview.items.length ? preview.items.map(batchEvaluationPreviewMarkup).join('') : '<p class="field-help">There are no pending manual player props to evaluate.</p>';
+      $('#batch-evaluation-preview-summary').textContent = `${preview.changed} changed · ${preview.unchanged} unchanged · ${preview.needs_review} need review · checked against ${context}. Original pre-bet evaluations will not be replaced.`;
+      $('#batch-evaluation-preview-list').innerHTML = preview.items.length ? preview.items.map(batchEvaluationPreviewMarkup).join('') : `<p class="field-help">No projection-model changes were detected across ${preview.checked} compatible pending player prop${preview.checked === 1 ? '' : 's'}.</p>`;
       updateBatchEvaluationSaveButton();
       batchEvaluationPreviewModal.hidden = false;
-    } catch (error) { toast(error.message, true); } finally { button.disabled = false; button.textContent = 'Evaluate manual bets'; }
+    } catch (error) { toast(error.message, true); } finally { button.disabled = false; button.textContent = 'Refresh pending models'; }
   }
   const refreshVisibleTracker = () => { if (latestTrackerData) render(latestTrackerData); };
   $('#btn-open-tracker').addEventListener('click', async () => { trackerModal.hidden = false; try { await loadTracker(); } catch (error) { toast(error.message, true); } });
@@ -333,7 +350,7 @@
   $('#btn-save-batch-evaluations').addEventListener('click', async event => {
     const ids = selectedBatchEvaluationIds(); if (!ids.length) return;
     const button = event.currentTarget; button.disabled = true; button.textContent = 'Saving…';
-    try { const saved = await api('/api/tracker/bets/later-evaluations/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bet_ids: ids }) }); batchEvaluationPreviewModal.hidden = true; latestBatchEvaluationPreview = null; await loadTracker(); toast(`${saved.saved_count} later evaluation${saved.saved_count === 1 ? '' : 's'} saved.`); } catch (error) { toast(error.message, true); updateBatchEvaluationSaveButton(); }
+    try { const saved = await api('/api/tracker/bets/evaluation-refreshes/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bet_ids: ids }) }); batchEvaluationPreviewModal.hidden = true; latestBatchEvaluationPreview = null; await loadTracker(); toast(`${saved.saved_count} projection update${saved.saved_count === 1 ? '' : 's'} saved. Original evaluations are unchanged.`); } catch (error) { toast(error.message, true); updateBatchEvaluationSaveButton(); }
   });
   checkResults.addEventListener('click', async () => { checkResults.disabled = true; checkResults.textContent = 'Checking…'; try { const data = await api('/api/tracker/results/preview', { method: 'POST' }); renderResultPreview(data); refreshVisibleTracker(); toast(`Checked ${data.checked_pending} pending bet${data.checked_pending === 1 ? '' : 's'}. No results were changed.`); } catch (error) { toast(error.message, true); } finally { checkResults.disabled = false; checkResults.textContent = 'Check results'; } });
   toggleResultPreview.addEventListener('click', () => { const collapsed = resultPreview.classList.toggle('is-collapsed'); toggleResultPreview.textContent = collapsed ? 'Expand' : 'Collapse'; toggleResultPreview.setAttribute('aria-expanded', String(!collapsed)); });
