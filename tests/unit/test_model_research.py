@@ -79,3 +79,36 @@ def test_research_excludes_missing_or_ambiguous_final_player_stats(monkeypatch):
     assert report["coverage"]["matched_rows"] == 0
     assert report["coverage"]["excluded"] == {"player_stat_missing_or_ambiguous": 1}
     assert report["markets"] == []
+
+
+def test_research_reports_rushing_attempts_from_nflverse_carries(monkeypatch):
+    attempts_snapshot = ProjectionSnapshot(
+        id="Attempts",
+        label="Attempts",
+        source="FantasyPoints",
+        season=2026,
+        week=2,
+        imported_at=datetime(2026, 9, 12, 12, tzinfo=timezone.utc),
+        projections=[
+            PlayerProjection(
+                player_name="Saquon Barkley",
+                team="PHI",
+                opponent="DAL",
+                position="RB",
+                stat_category=StatCategory.RUSHING_ATTEMPTS,
+                projection_mean=18.2,
+                season=2026,
+                week=2,
+            )
+        ],
+    )
+    stats = STATS.replace("rushing_yards,passing_yards", "rushing_yards,carries,passing_yards").replace("72,0,18", "72,19,0,18")
+    monkeypatch.setattr(projection_snapshot_store, "list", lambda: [attempts_snapshot])
+    monkeypatch.setattr(model_research_service, "_schedule_content", lambda refresh: (SCHEDULE, "2026-09-12T00:00:00+00:00", True))
+    monkeypatch.setattr(result_preview_service, "_season_content", lambda season, refresh: (stats, "2026-09-15T00:00:00+00:00", True))
+
+    report = model_research_service.report(season=2026, through_week=2)
+
+    assert report["markets"][0]["market"] == "rushing_attempts"
+    assert report["markets"][0]["average_projection"] == 18.2
+    assert report["markets"][0]["average_actual"] == 19.0

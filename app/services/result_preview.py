@@ -20,6 +20,7 @@ NFLVERSE_PLAYER_STATS_URL = (
 SUPPORTED_MARKETS = {
     "passing_yards": ("passing_yards", "passing yards"),
     "rushing_yards": ("rushing_yards", "rushing yards"),
+    "rushing_attempts": ("carries", "rushing attempts"),
     "receiving_yards": ("receiving_yards", "receiving yards"),
     "receptions": ("receptions", "receptions"),
 }
@@ -95,7 +96,7 @@ class ResultPreviewService:
                     "team": TeamNormalizer.canonical_team(raw.get("team") or ""),
                     "opponent": TeamNormalizer.canonical_team(raw.get("opponent_team") or ""),
                     "stats": {
-                        **{key: _number(raw.get(key)) for key in SUPPORTED_MARKETS},
+                        **{market: _number(raw.get(source_field)) for market, (source_field, _) in SUPPORTED_MARKETS.items()},
                         **{key: _number(raw.get(key)) for key in TOUCHDOWN_STAT_FIELDS},
                     },
                 }
@@ -140,8 +141,8 @@ class ResultPreviewService:
                     "message": "Preview only — a rushing or receiving touchdown proves this Anytime TD selection won.",
                 }
             return {**base, "status": "player_review", "message": "No rushing or receiving touchdown was found. Do not infer a loss: review Bet365 settlement for return or recovery touchdown exceptions."}
-        stat_field, label = SUPPORTED_MARKETS[bet["market"]]
-        actual = matches[0]["stats"].get(stat_field)
+        _, label = SUPPORTED_MARKETS[bet["market"]]
+        actual = matches[0]["stats"].get(bet["market"])
         if actual is None:
             return {**base, "status": "player_review", "message": "The matched player has no usable statistic for this market."}
         line = float(bet["line"])

@@ -21,6 +21,7 @@ NFLVERSE_SCHEDULE_URL = "https://github.com/nflverse/nfldata/releases/download/s
 SUPPORTED_MEAN_MARKETS = {
     "passing_yards": "passing yards",
     "rushing_yards": "rushing yards",
+    "rushing_attempts": "rushing attempts",
     "receiving_yards": "receiving yards",
     "receptions": "receptions",
 }

@@ -82,6 +82,26 @@ Josh Allen,BUF,QB,NE,35.0,0.0
     assert [player["player_name"] for player in game_browser.json()["players"]] == ["derrick henry"]
 
 
+def test_rushing_attempts_are_available_for_evaluation_and_browsing(client):
+    content = """Player,Team,Pos,Opp,Rush ATT\nSaquon Barkley,PHI,RB,DAL,18.2\n"""
+    imported = client.post(
+        "/api/upload/paste",
+        json={"data_type": "projections", "content": content, "season": 2026, "week": 2},
+    )
+    assert imported.status_code == 200
+
+    players = client.get("/api/evaluator/players?q=saquon").json()["players"]
+    assert players[0]["projections"]["rushing_attempts"] == 18.2
+    assert "rushing_attempts" in players[0]["markets"]
+
+    evaluation = client.post(
+        "/api/evaluator/evaluate",
+        json={"player_name": "Saquon Barkley", "stat_category": "rushing_attempts", "side": "over", "line": 17.5, "odds": 1.86},
+    )
+    assert evaluation.status_code == 200
+    assert evaluation.json()["model"]["distribution"] == "negative_binomial"
+
+
 def test_saved_evaluation_captures_result_match_identity(client):
     imported = client.post(
         "/api/upload/paste",

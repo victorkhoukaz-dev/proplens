@@ -153,9 +153,23 @@ class TestAdversarialDelimitersAndPastes:
         jsn_receiving = next(item for item in projs if item.player_name == "Jaxon Smith-Njigba" and item.stat_category == StatCategory.RECEIVING_YARDS)
         maye_passing = next(item for item in projs if item.player_name == "Drake Maye" and item.stat_category == StatCategory.PASSING_YARDS)
         maye_rushing = next(item for item in projs if item.player_name == "Drake Maye" and item.stat_category == StatCategory.RUSHING_YARDS)
+        maye_attempts = next(item for item in projs if item.player_name == "Drake Maye" and item.stat_category == StatCategory.RUSHING_ATTEMPTS)
         assert jsn_receiving.projection_mean == 77
         assert maye_passing.projection_mean == 210
         assert maye_rushing.projection_mean == 32
+        assert maye_attempts.projection_mean == 5
+
+    def test_fantasypoints_single_row_grouped_headers_keep_rushing_attempts(self, adapter):
+        csv_text = (
+            "RANK,NAME,Position,Team,Projection,OPP,FPTS,Passing,ATT,CMP,YDS,TD,INT,Rushing,ATT,YDS,TD,Receiving,TGT,REC,YDS,TD\n"
+            "1,Kenneth Walker,RB,SEA,,DEN,15.0,,0,0,0,0,0,,17,74,0.4,,3,2.5,19.3,0.1\n"
+        )
+
+        projs = adapter.parse_clipboard_text(csv_text)
+
+        rushing = {item.stat_category: item.projection_mean for item in projs if item.player_name == "Kenneth Walker"}
+        assert rushing[StatCategory.RUSHING_ATTEMPTS] == 17
+        assert rushing[StatCategory.RUSHING_YARDS] == 74
 
 
 class TestAdversarialMalformedTables:

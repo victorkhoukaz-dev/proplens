@@ -112,6 +112,7 @@ EVALUATOR_MARKETS: tuple[StatCategory, ...] = (
     StatCategory.PASSING_TDS,
     StatCategory.PASSING_INTERCEPTIONS,
     StatCategory.RUSHING_YARDS,
+    StatCategory.RUSHING_ATTEMPTS,
     StatCategory.RECEIVING_YARDS,
     StatCategory.RECEPTIONS,
     StatCategory.ANYTIME_TD,

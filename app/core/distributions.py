@@ -86,6 +86,12 @@ class DistributionEngine:
         "receptions": 0.10,
         "player_receptions": 0.10,
         "rec": 0.10,
+        # Carries are a discrete count. This initial prior will be revisited
+        # during calibration once enough final results exist.
+        "rushing_attempts": 0.12,
+        "player_rush_attempts": 0.12,
+        "rush_att": 0.12,
+        "carries": 0.12,
         "passing_interceptions": 0.08,
         "pass_ints": 0.08,
         "player_pass_interceptions": 0.08,

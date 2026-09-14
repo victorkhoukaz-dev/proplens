@@ -1,14 +1,14 @@
 /* Phase 4A extension: hybrid guided + free-text manual parlay tracking. */
 (() => {
   const $ = selector => document.querySelector(selector);
-  const trackerHeading = $('#parlay-tracker-title')?.closest('.parlay-tracker-heading');
-  if (!trackerHeading) return;
+  const slipActions = $('#parlay-modal .parlay-heading-actions');
+  if (!slipActions) return;
 
   const config = window.proplensManualEntryConfig || { markets: {}, positionMarketDefaults: {} };
   const marketLabel = key => Object.values(config.markets).flat().find(([value]) => value === key)?.[1] || key || 'Other';
   const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[character]));
 
-  trackerHeading.insertAdjacentHTML('beforeend', '<button type="button" id="btn-manual-parlay" class="manual-parlay-button">+ Track manual parlay</button>');
+  slipActions.insertAdjacentHTML('afterbegin', '<button type="button" id="btn-manual-parlay" class="parlay-sensitivity-toggle">Track manual parlay</button>');
   document.body.insertAdjacentHTML('beforeend', `
     <div class="modal-backdrop" id="manual-parlay-modal" hidden>
       <section class="modal-card manual-parlay-card" role="dialog" aria-modal="true" aria-labelledby="manual-parlay-title">
@@ -189,7 +189,7 @@
   status.addEventListener('change', updateSettlementVisibility); $('#manual-parlay-season').addEventListener('change', applyWeekSuggestion); $('#manual-parlay-week').addEventListener('change', rememberWeek);
   form.addEventListener('submit', async event => {
     event.preventDefault(); const button = $('#btn-save-manual-parlay'); button.disabled = true;
-    try { const body = payload(); const url = editingId ? `/api/tracker/parlays/${editingId}/manual` : '/api/tracker/parlays/manual'; await api(url, { method: editingId ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); modal.hidden = true; await window.proplensRefreshParlayTracker?.(); toast(editingId ? 'Manual parlay updated.' : 'Manual parlay added to the tracker.'); }
+    try { const body = payload(); const url = editingId ? `/api/tracker/parlays/${editingId}/manual` : '/api/tracker/parlays/manual'; await api(url, { method: editingId ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); modal.hidden = true; await window.proplensRefreshParlayTracker?.(); await window.proplensRefreshTracker?.(); toast(editingId ? 'Manual parlay updated.' : 'Manual parlay added to the tracker.'); }
     catch (error) { toast(error.message, true); } finally { button.disabled = false; }
   });
 })();

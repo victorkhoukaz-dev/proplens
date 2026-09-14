@@ -345,14 +345,30 @@ class FantasyPointsAdapter(BaseProjectionAdapter):
         as Passing/Rushing/Receiving, followed by generic labels like YDS and
         TD. Those labels only make sense when combined with their group.
         """
-        first = self._normalize_headers([str(cell or "").strip().lstrip("\ufeff") for cell in rows[0]])
-        if "player" in first or len(rows) < 2:
+        first_raw = [str(cell or "").strip().lstrip("\ufeff") for cell in rows[0]]
+        first = self._normalize_headers(first_raw)
+        if "player" in first:
+            # Some exports place both group names (for example, "Rushing")
+            # and generic detail names ("ATT", "YDS") on one header row.
+            # Preserve the group context so the rushing ATT is not mistaken
+            # for an unrelated generic column.
+            return self._combine_grouped_headers(first_raw, first_raw, first), 1
+        if len(rows) < 2:
             return first, 1
         second_raw = [str(cell or "").strip().lstrip("\ufeff") for cell in rows[1]]
         second = self._normalize_headers(second_raw)
         if "player" not in second:
             return first, 1
 
+        return self._combine_grouped_headers(first_raw, second_raw, second), 2
+
+    def _combine_grouped_headers(
+        self,
+        group_headers: Sequence[str],
+        detail_headers: Sequence[str],
+        normalized_details: Sequence[str],
+    ) -> list[str]:
+        """Resolve generic ATT/YDS/TD labels against their passing/rushing/receiving group."""
         group = ""
         combined: list[str] = []
         grouped_columns = {
@@ -360,13 +376,14 @@ class FantasyPointsAdapter(BaseProjectionAdapter):
             "rushing": {"att": "rush_att", "yds": "rush_yds", "td": "rush_td"},
             "receiving": {"tgt": "targets", "rec": "receptions", "yds": "rec_yds", "td": "rec_td"},
         }
-        for index, detail in enumerate(second_raw):
-            group_label = str(rows[0][index] if index < len(rows[0]) else "").strip().casefold()
+        for index, detail in enumerate(detail_headers):
+            group_label = str(group_headers[index] if index < len(group_headers) else "").strip().casefold()
             if group_label in grouped_columns:
                 group = group_label
             detail_key = re.sub(r"[^a-z0-9]", "", detail.casefold())
-            combined.append(grouped_columns.get(group, {}).get(detail_key, second[index]))
-        return combined, 2
+            fallback = normalized_details[index] if index < len(normalized_details) else ""
+            combined.append(grouped_columns.get(group, {}).get(detail_key, fallback))
+        return combined
 
     def sniff_delimiter(self, text: str) -> str:
         """

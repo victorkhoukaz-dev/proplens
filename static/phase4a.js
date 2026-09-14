@@ -18,7 +18,7 @@
   const markets = {
     player_prop: [
       ['passing_yards', 'Passing yards'], ['passing_tds', 'Passing TDs'],
-      ['passing_interceptions', 'Passing interceptions'], ['rushing_yards', 'Rushing yards'],
+      ['passing_interceptions', 'Passing interceptions'], ['rushing_yards', 'Rushing yards'], ['rushing_attempts', 'Rushing attempts'],
       ['rushing_receiving_yards', 'Rushing + receiving yards'],
       ['receiving_yards', 'Receiving yards'], ['receptions', 'Receptions'],
       ['anytime_td', 'Anytime TD'], ['tackles_assists', 'Tackles + assists'],

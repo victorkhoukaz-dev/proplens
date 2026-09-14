@@ -14,7 +14,7 @@
   const recentStorageKey = 'proplens_recent_evaluated_players_v1';
   const preferredMarket = { QB: 'passing_yards', RB: 'rushing_yards', WR: 'receiving_yards', TE: 'receiving_yards' };
   const compactLabels = {
-    passing_yards: 'Pass', passing_tds: 'Pass TD', rushing_yards: 'Rush',
+    passing_yards: 'Pass', passing_tds: 'Pass TD', rushing_yards: 'Rush', rushing_attempts: 'Att',
     receiving_yards: 'Rec', receptions: 'Recs', anytime_td: 'TD',
   };
   let players = [];

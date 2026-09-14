@@ -51,6 +51,19 @@ def test_preview_proposes_result_without_settling_or_network(monkeypatch):
     ]
 
 
+def test_preview_proposes_rushing_attempts_from_nflverse_carries(monkeypatch):
+    content = FIXTURE.read_text(encoding="utf-8")
+    monkeypatch.setattr(result_preview_service, "_season_content", lambda season, refresh: (content, "2025-09-08T12:00:00+00:00", False))
+
+    report = result_preview_service.preview([pending_bet(market="rushing_attempts", line=17.5)])
+
+    proposal = report["proposals"][0]
+    assert proposal["status"] == "proposal"
+    assert proposal["proposed_result"] == "won"
+    assert proposal["actual_stat"] == 18.0
+    assert proposal["stat_label"] == "rushing attempts"
+
+
 def test_preview_never_assumes_missing_player_has_zero(monkeypatch):
     content = FIXTURE.read_text(encoding="utf-8")
     monkeypatch.setattr(result_preview_service, "_season_content", lambda season, refresh: (content, "2025-09-08T12:00:00+00:00", False))
