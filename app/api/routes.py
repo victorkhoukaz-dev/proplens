@@ -34,6 +34,7 @@ from app.db.projection_snapshot_store import (
 from app.db.raw_odds_snapshot_store import raw_odds_snapshot_store
 from app.db.settings_store import settings_store
 from app.services.result_preview import SUPPORTED_MARKETS, result_preview_service
+from app.services.parlay_result_preview import parlay_result_preview_service
 from app.services.model_research import ModelResearchError, model_research_service
 from app.schemas.ev import MatchedEVOpportunity, PropBreakdown
 from app.schemas.projections import PlayerProjection, Position, StatCategory
@@ -882,13 +883,22 @@ def _manual_parlay_record(payload: ManualTrackedParlayRequest) -> dict[str, Any]
         raise HTTPException(status_code=400, detail="Winning total return cannot be less than the stake.")
     manual_legs = []
     for leg in payload.legs:
-        result_identity = leg.result_identity if leg.entry_mode == "evaluated" and leg.result_identity else {
-            "version": 1,
-            "status": "manual_required",
-            "season": payload.season,
-            "week": payload.week,
-            "position": leg.position,
-        }
+        if leg.entry_mode == "evaluated" and leg.result_identity:
+            result_identity = leg.result_identity
+        else:
+            team = TeamNormalizer.canonical_team(leg.team or "")
+            opponent = TeamNormalizer.canonical_team(leg.opponent or "")
+            result_identity = {
+                "version": 1,
+                "status": "manual_required",
+                "season": payload.season,
+                "week": payload.week,
+                "player_key": PlayerNameNormalizer.clean_name(leg.player_name or ""),
+                "team": team or None,
+                "opponent": opponent or None,
+                "matchup_key": "|".join(sorted((team, opponent))) if team and opponent else None,
+                "position": leg.position,
+            }
         manual_legs.append(
             {
                 "entry_mode": leg.entry_mode,
@@ -1346,6 +1356,34 @@ def preview_tracked_bet_results() -> dict[str, Any]:
         raise HTTPException(status_code=502, detail="Could not check nflverse results right now. Your tracked bets were not changed.") from exc
 
 
+@router.post("/tracker/results/preview/all")
+def preview_all_tracked_results() -> dict[str, Any]:
+    """Return one preview-only result check for straight bets and parlays."""
+    try:
+        straight = result_preview_service.preview(bet_tracker_store.list(), refresh=True)
+        checked_seasons = {source["season"] for source in straight.get("sources", [])}
+        parlays = parlay_result_preview_service.preview(
+            parlay_tracker_store.list(),
+            refresh=True,
+            already_refreshed_seasons=checked_seasons,
+        )
+        sources_by_season = {source["season"]: source for source in straight.get("sources", [])}
+        for source in parlays.get("sources", []):
+            sources_by_season.setdefault(source["season"], source)
+        return {
+            "preview_only": True,
+            "checked_pending": straight["checked_pending"] + parlays["checked_pending"],
+            "checked_straight": straight["checked_pending"],
+            "checked_parlays": parlays["checked_pending"],
+            "sources": list(sources_by_season.values()),
+            "proposals": straight["proposals"],
+            "parlays": parlays["parlays"],
+        }
+    except Exception as exc:
+        logger.warning("Combined result preview could not complete: %s", exc)
+        raise HTTPException(status_code=502, detail="Could not check nflverse results right now. Your tracked bets and parlays were not changed.") from exc
+
+
 @router.post("/tracker/bets/{bet_id}/confirm-result-preview")
 def confirm_result_preview(bet_id: str, payload: ResultPreviewConfirmRequest) -> dict[str, Any]:
     """Explicitly confirm one still-pending, exact matched result preview."""
@@ -1787,6 +1825,16 @@ def list_tracked_parlays(include_pending: bool = True) -> dict[str, Any]:
     return {"parlays": parlay_tracker_store.list(), "summary": parlay_tracker_store.summary(include_pending=include_pending)}
 
 
+@router.post("/tracker/parlays/results/preview")
+def preview_tracked_parlay_results() -> dict[str, Any]:
+    """Check eligible pending parlay legs without changing any saved parlay."""
+    try:
+        return parlay_result_preview_service.preview(parlay_tracker_store.list(), refresh=True)
+    except Exception as exc:
+        logger.warning("Parlay result preview could not complete: %s", exc)
+        raise HTTPException(status_code=502, detail="Could not check nflverse results right now. Your parlays were not changed.") from exc
+
+
 @router.post("/tracker/parlays")
 def create_tracked_parlay(payload: TrackedParlayCreateRequest) -> dict[str, Any]:
     winning_total_return = payload.actual_total_return if payload.actual_total_return is not None else round(
@@ -1846,6 +1894,43 @@ def settle_tracked_parlay(parlay_id: str, payload: TrackedParlaySettleRequest) -
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"success": True, "parlay": parlay, "summary": parlay_tracker_store.summary()}
+
+
+@router.post("/tracker/parlays/{parlay_id}/confirm-result-preview")
+def confirm_parlay_result_preview(parlay_id: str, payload: ResultPreviewConfirmRequest) -> dict[str, Any]:
+    """Explicitly confirm one still-pending, safe whole-parlay result preview."""
+    parlay = next((item for item in parlay_tracker_store.list() if item["id"] == parlay_id), None)
+    if parlay is None:
+        raise HTTPException(status_code=404, detail="Tracked parlay not found.")
+    if parlay.get("status") != "pending":
+        raise HTTPException(status_code=409, detail="Only a pending parlay can be confirmed from a result preview.")
+    try:
+        report = parlay_result_preview_service.preview([parlay], refresh=False)
+    except Exception as exc:
+        logger.warning("Could not recheck parlay result preview for %s: %s", parlay_id, exc)
+        raise HTTPException(status_code=502, detail="Could not recheck this parlay. Your tracked parlay was not changed.") from exc
+    proposal = next((item for item in report.get("parlays", []) if item.get("parlay_id") == parlay_id), None)
+    if not proposal or proposal.get("status") != "proposal" or proposal.get("proposed_result") not in {"won", "lost"}:
+        raise HTTPException(status_code=409, detail="This parlay is no longer an exact final-stat result suggestion. Your tracked parlay was not changed.")
+    if proposal["proposed_result"] != payload.expected_result:
+        raise HTTPException(status_code=409, detail="The proposed result changed. Check results again before confirming.")
+    source = report["sources"][0] if report.get("sources") else {}
+    evidence = {
+        "version": 1,
+        "source": source.get("source", "nflverse"),
+        "source_fetched_at": source.get("fetched_at"),
+        "proposed_result": proposal["proposed_result"],
+        "reason": proposal.get("message"),
+        "legs": [
+            {key: leg.get(key) for key in ("player_name", "market", "line", "proposed_result", "actual_stat", "stat_label", "status")}
+            for leg in proposal.get("legs", [])
+        ],
+    }
+    try:
+        confirmed = parlay_tracker_store.settle(parlay_id, payload.expected_result, evidence=evidence)
+    except TrackedParlayNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Tracked parlay not found.") from exc
+    return {"success": True, "parlay": confirmed, "evidence": evidence}
 
 
 @router.put("/tracker/parlays/{parlay_id}")

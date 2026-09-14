@@ -155,7 +155,13 @@ class ResultPreviewService:
             "message": "Preview only — confirm it against Bet365 before recording the result.",
         }
 
-    def preview(self, bets: list[dict[str, Any]], *, refresh: bool = True) -> dict[str, Any]:
+    def preview(
+        self,
+        bets: list[dict[str, Any]],
+        *,
+        refresh: bool = True,
+        already_refreshed_seasons: set[int] | None = None,
+    ) -> dict[str, Any]:
         pending = [bet for bet in bets if bet.get("status") == "pending"]
         seasons = sorted(
             {
@@ -167,9 +173,13 @@ class ResultPreviewService:
         rows: list[dict[str, Any]] = []
         source_checks: list[dict[str, Any]] = []
         errors: dict[int, str] = {}
+        already_refreshed_seasons = already_refreshed_seasons or set()
         for season in seasons:
             try:
-                content, fetched_at, used_cache = self._season_content(season, refresh=refresh)
+                content, fetched_at, used_cache = self._season_content(
+                    season,
+                    refresh=refresh and season not in already_refreshed_seasons,
+                )
                 rows.extend(self._rows(content))
                 source_checks.append({"season": season, "source": "nflverse", "fetched_at": fetched_at, "used_cache": used_cache})
             except ResultPreviewError as exc:

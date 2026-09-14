@@ -11,7 +11,7 @@
     trackerSort.insertAdjacentElement('afterend', select);
     return select;
   })();
-  let selectedBet = null, selectedLaterEvaluationBet = null, laterEvaluationPlayers = [], latestTrackerData = null, latestOverallSummary = null, latestResultPreview = null, latestBatchEvaluationPreview = null, showingSuggestionsOnly = false;
+  let selectedBet = null, selectedLaterEvaluationBet = null, laterEvaluationPlayers = [], latestTrackerData = null, latestOverallSummary = null, latestResultPreview = null, latestParlayResultPreviews = [], latestBatchEvaluationPreview = null, showingSuggestionsOnly = false;
   const trackerShowEvaluations = (() => {
     const options = trackerIncludePending.closest('.tracker-summary-options');
     const label = document.createElement('label');
@@ -195,7 +195,10 @@
     const tag = mixed ? '<span class="manual-entry-tag">Mixed parlay</span>' : parlay.entry_origin === 'manual' ? '<span class="manual-entry-tag">Manual parlay</span>' : '<span class="activity-tag">Parlay</span>';
     const compactEvaluation = compactParlayEvaluationMarkup(parlay);
     const meta = compactEvaluation ? '' : `<small>${week ? `W${escapeHtml(week)} · ` : ''}${escapeHtml(legSummary)} · ${parlay.bet_type === 'bonus' ? 'Bonus' : 'Cash'} · ${money(parlay.stake)}</small>`;
-    return `<article class="tracked-bet tracked-parlay-activity ${parlay.status === 'pending' ? 'is-pending' : 'is-settled'}"><div class="bet-identity${compactEvaluation ? ' has-compact-evaluation' : ''}"${compactEvaluation ? ' style="flex-wrap:wrap"' : ''}><strong>${tag}${escapeHtml(title)}</strong><span class="bet-prop">${Number(parlay.effective_decimal_odds).toFixed(2)} odds</span>${meta}${compactEvaluation}</div><div class="bet-status ${parlay.status}"><span>${label}</span>${settled ? `<strong class="${profit >= 0 ? 'positive' : 'negative'}">${profit >= 0 ? '+' : ''}${money(profit)}</strong>` : ''}</div><div class="settle-actions"><button data-open-parlay-tracker="true">Open parlay</button></div></article>`;
+    const suggestion = latestParlayResultPreviews.find(item => item.parlay_id === parlay.id);
+    const canConfirm = parlay.status === 'pending' && suggestion?.status === 'proposal' && ['won', 'lost'].includes(suggestion.proposed_result);
+    const actions = canConfirm ? `<button class="settle-win confirm-result" data-confirm-parlay-preview="${parlay.id}" data-proposed-result="${suggestion.proposed_result}">Confirm ${suggestion.proposed_result[0].toUpperCase() + suggestion.proposed_result.slice(1)}</button><button data-open-parlay-tracker="true">Open parlay</button>` : '<button data-open-parlay-tracker="true">Open parlay</button>';
+    return `<article class="tracked-bet tracked-parlay-activity ${parlay.status === 'pending' ? 'is-pending' : 'is-settled'}"><div class="bet-identity${compactEvaluation ? ' has-compact-evaluation' : ''}"${compactEvaluation ? ' style="flex-wrap:wrap"' : ''}><strong>${tag}${escapeHtml(title)}</strong><span class="bet-prop">${Number(parlay.effective_decimal_odds).toFixed(2)} odds</span>${meta}${compactEvaluation}</div><div class="bet-status ${parlay.status}"><span>${label}</span>${settled ? `<strong class="${profit >= 0 ? 'positive' : 'negative'}">${profit >= 0 ? '+' : ''}${money(profit)}</strong>` : ''}</div><div class="settle-actions">${actions}</div></article>`;
   }
   function render(data) {
     latestTrackerData = data; window.proplensTrackedBets = data.bets;
@@ -231,18 +234,33 @@
     const line = item.line === null || item.line === undefined ? '' : ` ${item.line}`;
     return `<div class="result-preview-row"><div><strong>${escapeHtml(item.player_name)} · ${escapeHtml(marketLabel(item.market))}${line}</strong><small>${actual}</small></div><span class="result-preview-outcome ${outcomeClass}">${outcome}</span></div>`;
   }
+  function parlayPreviewMarkup(parlay) {
+    const suggestion = parlay.proposed_result ? `Suggest ${parlay.proposed_result[0].toUpperCase()}${parlay.proposed_result.slice(1)}` : parlay.status === 'waiting' ? 'Waiting for stats' : parlay.status === 'push_review' ? 'Push review' : 'Needs review';
+    const legs = (parlay.legs || []).map(leg => {
+      const selection = [leg.player_name, marketLabel(leg.market), leg.line].filter(value => value !== undefined && value !== null && value !== '').join(' · ');
+      const detail = leg.status === 'proposal' ? `Actual: ${leg.actual_stat} ${leg.stat_label || ''}` : leg.message;
+      const outcome = leg.proposed_result ? leg.proposed_result[0].toUpperCase() + leg.proposed_result.slice(1) : leg.status === 'manual_required' ? 'Manual' : leg.status === 'game_not_final' || leg.status === 'stats_unavailable' ? 'Waiting' : 'Review';
+      return `<div class="result-preview-row parlay-result-preview-row"><div><strong>${escapeHtml(selection)}</strong><small>${escapeHtml(detail || '')}</small></div><span class="result-preview-outcome ${escapeHtml(leg.proposed_result || (leg.status === 'waiting' ? 'waiting' : 'review'))}">${escapeHtml(outcome)}</span></div>`;
+    }).join('');
+    return `<section class="result-preview-parlay"><div class="result-preview-parlay-heading"><div><strong>${escapeHtml(parlay.description)}</strong><small>${escapeHtml(parlay.message || '')}</small></div><span class="result-preview-outcome ${escapeHtml(parlay.proposed_result || (parlay.status === 'waiting' ? 'waiting' : 'review'))}">${escapeHtml(suggestion)}</span></div>${legs}</section>`;
+  }
   function renderResultPreview(data) {
     latestResultPreview = data;
+    latestParlayResultPreviews = data.parlays || [];
     resultPreview.hidden = false;
     resultPreview.classList.remove('is-collapsed');
     toggleResultPreview.textContent = 'Collapse';
     toggleResultPreview.setAttribute('aria-expanded', 'true');
     const proposedItems = data.proposals.filter(item => item.status === 'proposal');
-    const proposed = proposedItems.length;
+    const parlayProposals = (data.parlays || []).filter(item => item.status === 'proposal');
+    const proposed = proposedItems.length + parlayProposals.length;
     const sourceNote = data.sources.length ? ` · nflverse ${data.sources.map(source => `${source.season} ${source.used_cache ? 'cache' : 'refresh'}`).join(', ')}` : '';
     const outcomes = ['won', 'lost', 'push'].map(status => { const count = proposedItems.filter(item => item.proposed_result === status).length; return count ? `${count} ${status[0].toUpperCase() + status.slice(1)}` : ''; }).filter(Boolean).join(' · ');
-    resultPreviewSummary.textContent = `${proposed} suggestion${proposed === 1 ? '' : 's'}${outcomes ? ` · ${outcomes}` : ''}${sourceNote}`;
-    resultPreviewList.innerHTML = data.proposals.length ? data.proposals.map(previewMarkup).join('') : '<p class="field-help">There are no pending bets to check.</p>';
+    const checked = data.checked_straight === undefined ? '' : ` · ${data.checked_straight} straight bet${data.checked_straight === 1 ? '' : 's'} and ${data.checked_parlays} parlay${data.checked_parlays === 1 ? '' : 's'} checked`;
+    resultPreviewSummary.textContent = `${proposed} suggestion${proposed === 1 ? '' : 's'}${outcomes ? ` · ${outcomes}` : ''}${checked}${sourceNote}`;
+    const straightSection = data.proposals.length ? `<div class="result-preview-section"><strong>Straight bets</strong>${data.proposals.map(previewMarkup).join('')}</div>` : '';
+    const parlaySection = data.parlays?.length ? `<div class="result-preview-section"><strong>Parlays</strong>${data.parlays.map(parlayPreviewMarkup).join('')}</div>` : '';
+    resultPreviewList.innerHTML = straightSection || parlaySection ? `${straightSection}${parlaySection}` : '<p class="field-help">There are no pending bets or parlays to check.</p>';
     showingSuggestionsOnly = false;
     suggestionsOnly.hidden = !proposed;
     suggestionsOnly.classList.remove('active');
@@ -359,7 +377,7 @@
     const button = event.currentTarget; button.disabled = true; button.textContent = 'Saving…';
     try { const saved = await api('/api/tracker/bets/evaluation-refreshes/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bet_ids: ids }) }); batchEvaluationPreviewModal.hidden = true; latestBatchEvaluationPreview = null; await loadTracker(); toast(`${saved.saved_count} projection update${saved.saved_count === 1 ? '' : 's'} saved. Original evaluations are unchanged.`); } catch (error) { toast(error.message, true); updateBatchEvaluationSaveButton(); }
   });
-  checkResults.addEventListener('click', async () => { checkResults.disabled = true; checkResults.textContent = 'Checking…'; try { const data = await api('/api/tracker/results/preview', { method: 'POST' }); renderResultPreview(data); refreshVisibleTracker(); toast(`Checked ${data.checked_pending} pending bet${data.checked_pending === 1 ? '' : 's'}. No results were changed.`); } catch (error) { toast(error.message, true); } finally { checkResults.disabled = false; checkResults.textContent = 'Check results'; } });
+  checkResults.addEventListener('click', async () => { checkResults.disabled = true; checkResults.textContent = 'Checking…'; try { const data = await api('/api/tracker/results/preview/all', { method: 'POST' }); renderResultPreview(data); refreshVisibleTracker(); toast(`Checked ${data.checked_straight} straight bet${data.checked_straight === 1 ? '' : 's'} and ${data.checked_parlays} parlay${data.checked_parlays === 1 ? '' : 's'}. No results were changed.`); } catch (error) { toast(error.message, true); } finally { checkResults.disabled = false; checkResults.textContent = 'Check results'; } });
   toggleResultPreview.addEventListener('click', () => { const collapsed = resultPreview.classList.toggle('is-collapsed'); toggleResultPreview.textContent = collapsed ? 'Expand' : 'Collapse'; toggleResultPreview.setAttribute('aria-expanded', String(!collapsed)); });
   suggestionsOnly.addEventListener('click', () => { showingSuggestionsOnly = !showingSuggestionsOnly; suggestionsOnly.classList.toggle('active', showingSuggestionsOnly); suggestionsOnly.textContent = showingSuggestionsOnly ? 'Show all bets' : `Suggestions only (${latestResultPreview?.proposals.filter(item => item.status === 'proposal').length || 0})`; refreshVisibleTracker(); });
   trackerIncludePending.addEventListener('change', () => loadTracker().catch(error => toast(error.message, true)));
@@ -394,6 +412,7 @@
     if (button.dataset.viewLaterEvaluations) { const bet = findBet(button.dataset.viewLaterEvaluations); if (bet) showLaterEvaluationHistory(bet); return; }
     if (button.dataset.viewSavedEvaluation) { const bet = findBet(button.dataset.viewSavedEvaluation); if (bet) showSavedEvaluation(bet); return; }
     if (button.dataset.editManual) return;
+    if (button.dataset.confirmParlayPreview) { button.disabled = true; try { const result = button.dataset.proposedResult; await api(`/api/tracker/parlays/${button.dataset.confirmParlayPreview}/confirm-result-preview`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ expected_result: result }) }); latestParlayResultPreviews = latestParlayResultPreviews.filter(item => item.parlay_id !== button.dataset.confirmParlayPreview); toast(`Confirmed parlay ${result} with nflverse evidence saved.`); await loadTracker(); } catch (error) { toast(error.message, true); } finally { button.disabled = false; } return; }
     if (button.dataset.openParlayTracker) { $('#btn-open-parlay-tracker').click(); return; }
     if (button.dataset.edit) { selectedBet = findBet(button.dataset.edit); if (!selectedBet) return; $('#edit-bet-summary').textContent = `${selectedBet.player_name} ${selectedBet.side_label} ${selectedBet.line}`; $('#edit-bet-type').value = selectedBet.bet_type; $('#edit-bet-stake').value = selectedBet.stake; $('#edit-bet-line').value = selectedBet.line; $('#edit-bet-odds').value = selectedBet.decimal_odds; $('#edit-bet-status').value = selectedBet.status; $('#edit-settlement-amount').value = selectedBet.settlement_amount ?? ''; editModal.hidden = false; return; }
     if (button.dataset.cashout) { selectedBet = findBet(button.dataset.cashout); if (!selectedBet) return; $('#cashout-summary').textContent = `${selectedBet.player_name} ${selectedBet.side_label} ${selectedBet.line} · stake ${money(selectedBet.stake)}`; $('#cashout-amount').value = ''; cashoutModal.hidden = false; return; }

@@ -76,7 +76,14 @@ class ParlayTrackerStore:
             return round(settlement_amount if parlay["bet_type"] == "bonus" else settlement_amount - stake, 2)
         return 0.0
 
-    def settle(self, parlay_id: str, status: str, settlement_amount: float | None = None) -> dict[str, Any]:
+    def settle(
+        self,
+        parlay_id: str,
+        status: str,
+        settlement_amount: float | None = None,
+        *,
+        evidence: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         with self._lock:
             parlays = self._read()
             for parlay in parlays:
@@ -85,8 +92,8 @@ class ParlayTrackerStore:
                 profit = self._profit(parlay, status, settlement_amount)
                 settled_at = datetime.now(timezone.utc).isoformat()
                 history = list(parlay.get("settlement_history") or [])
-                history.append({"at": settled_at, "status": status, "settlement_amount": settlement_amount, "source": "manual"})
-                parlay.update({"status": status, "profit": profit, "settlement_amount": settlement_amount, "settled_at": settled_at, "settlement_history": history})
+                history.append({"at": settled_at, "status": status, "settlement_amount": settlement_amount, "source": "result_preview" if evidence else "manual", "evidence": evidence})
+                parlay.update({"status": status, "profit": profit, "settlement_amount": settlement_amount, "settled_at": settled_at, "settlement_evidence": evidence, "settlement_history": history})
                 self._write(parlays)
                 return parlay
         raise TrackedParlayNotFoundError(parlay_id)
