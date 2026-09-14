@@ -222,6 +222,12 @@
     const ev = (probability * odds - 1) * 100;
     return `<small class="compact-evaluation" style="display:block;flex:0 0 100%;width:100%"><span>Cross-game model baseline</span> · Model ${modelPercent(probability)} · Fair ${fairOdds.toFixed(2)} · <b class="${ev >= 0 ? 'positive' : 'negative'}">${ev >= 0 ? '+' : ''}${ev.toFixed(2)}% EV</b></small>`;
   }
+  function parlayLegModelChanceMarkup(leg) {
+    if (!trackerShowEvaluations.checked) return '';
+    const probability = Number(leg.probability);
+    if (!Number.isFinite(probability) || probability <= 0 || probability >= 1) return '<span class="unified-parlay-leg-model unavailable">No saved model</span>';
+    return `<span class="unified-parlay-leg-model">${modelPercent(probability)} model</span>`;
+  }
   function parlayRowMarkup(parlay) {
     const settled = parlay.status !== 'pending', profit = Number(parlay.profit || 0), week = parlayWeekContext(parlay).week;
     const label = parlay.status === 'cashed_out' ? 'Cashed out' : parlay.status === 'cancelled' ? 'Cancelled before start' : parlay.status === 'push_adjusted' ? 'Push-adjusted' : parlay.status === 'void_adjusted' ? 'Void-adjusted' : parlay.status[0].toUpperCase() + parlay.status.slice(1);
@@ -231,7 +237,7 @@
     const legRows = parlay.legs.map((leg, index) => {
       const name = leg.description || [leg.player_name, leg.side_label, leg.line ?? '', marketLabel(leg.market)].filter(value => value !== '').join(' · ');
       const game = [leg.team, leg.opponent].filter(Boolean).join(' vs ');
-      return `<div class="unified-parlay-leg"><b>${escapeHtml(name)}</b>${game ? `<small>${escapeHtml(game)}</small>` : ''}</div>`;
+      return `<div class="unified-parlay-leg"><b>${escapeHtml(name)}</b>${parlayLegModelChanceMarkup(leg)}${game ? `<small>${escapeHtml(game)}</small>` : ''}</div>`;
     }).join('');
     const meta = `<small class="unified-parlay-meta">${week ? `W${escapeHtml(week)} · ` : ''}${parlay.bet_type === 'bonus' ? 'Bonus' : 'Cash'} · ${money(parlay.stake)} · ${Number(parlay.effective_decimal_odds).toFixed(2)} odds</small>`;
     const suggestion = latestParlayResultPreviews.find(item => item.parlay_id === parlay.id);
