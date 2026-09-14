@@ -26,10 +26,18 @@
   function evaluationMarkup(parlay) {
     if (!showEvaluations.checked || parlay.entry_origin !== 'parlay_evaluator') return '';
     const gameKeys = parlay.legs.map(gameKey);
-    if (gameKeys.length < 2 || gameKeys.some(key => !key) || new Set(gameKeys).size !== gameKeys.length) return '';
-    const combinedProbability = Number(parlay.independent_model_probability), combinedOdds = Number(parlay.effective_decimal_odds);
-    if (!Number.isFinite(combinedProbability) || combinedProbability <= 0 || combinedProbability >= 1 || !Number.isFinite(combinedOdds) || combinedOdds <= 1) return '';
-    const combinedFair = 1 / combinedProbability, combinedEv = (combinedProbability * combinedOdds - 1) * 100;
+    if (gameKeys.length < 2 || gameKeys.some(key => !key)) return '';
+    const combinedProbability = Number(parlay.independent_model_probability);
+    if (!Number.isFinite(combinedProbability) || combinedProbability <= 0 || combinedProbability >= 1) return '';
+    const combinedFair = 1 / combinedProbability;
+    if (new Set(gameKeys).size !== gameKeys.length) {
+      const bet365Odds = Number(parlay.original_decimal_odds);
+      if (!Number.isFinite(bet365Odds) || bet365Odds <= 1) return '';
+      return `<div class="parlay-evaluation parlay-independent-reference"><small class="parlay-combined-evaluation"><span>Independent reference<sup title="Assumes same-game legs are unrelated. This is not correlation-adjusted and is not an EV verdict.">*</sup></span> · Win ${(combinedProbability * 100).toFixed(1)}% · Fair ${combinedFair.toFixed(2)} · Bet365 ${bet365Odds.toFixed(2)}</small><small class="parlay-reference-caveat">* Assumes the same-game legs are unrelated; reference only, not an EV verdict.</small></div>`;
+    }
+    const combinedOdds = Number(parlay.effective_decimal_odds);
+    if (!Number.isFinite(combinedOdds) || combinedOdds <= 1) return '';
+    const combinedEv = (combinedProbability * combinedOdds - 1) * 100;
     const legs = parlay.legs.map(leg => {
       const probability = Number(leg.probability), odds = Number(leg.decimal_odds);
       if (!Number.isFinite(probability) || probability <= 0 || probability >= 1 || !Number.isFinite(odds) || odds <= 1) return '';

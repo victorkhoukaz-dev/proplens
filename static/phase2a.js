@@ -173,11 +173,18 @@
   function compactParlayEvaluationMarkup(parlay) {
     if (!trackerShowEvaluations.checked || parlay.entry_origin !== 'parlay_evaluator') return '';
     const gameKeys = parlay.legs.map(parlayGameKey);
-    if (gameKeys.length < 2 || gameKeys.some(key => !key) || new Set(gameKeys).size !== gameKeys.length) return '';
+    if (gameKeys.length < 2 || gameKeys.some(key => !key)) return '';
     const probability = Number(parlay.independent_model_probability);
+    if (!Number.isFinite(probability) || probability <= 0 || probability >= 1) return '';
+    const fairOdds = 1 / probability;
+    if (new Set(gameKeys).size !== gameKeys.length) {
+      const bet365Odds = Number(parlay.original_decimal_odds);
+      if (!Number.isFinite(bet365Odds) || bet365Odds <= 1) return '';
+      return `<small class="compact-evaluation compact-independent-reference" style="display:block;flex:0 0 100%;width:100%"><span>Independent reference<sup title="Assumes same-game legs are unrelated. This is not correlation-adjusted and is not an EV verdict.">*</sup></span> · Win ${modelPercent(probability)} · Fair ${fairOdds.toFixed(2)} · Bet365 ${bet365Odds.toFixed(2)}</small>`;
+    }
     const odds = Number(parlay.effective_decimal_odds);
-    if (!Number.isFinite(probability) || probability <= 0 || probability >= 1 || !Number.isFinite(odds) || odds <= 1) return '';
-    const fairOdds = 1 / probability, ev = (probability * odds - 1) * 100;
+    if (!Number.isFinite(odds) || odds <= 1) return '';
+    const ev = (probability * odds - 1) * 100;
     return `<small class="compact-evaluation" style="display:block;flex:0 0 100%;width:100%"><span>Cross-game model baseline</span> · Model ${modelPercent(probability)} · Fair ${fairOdds.toFixed(2)} · <b class="${ev >= 0 ? 'positive' : 'negative'}">${ev >= 0 ? '+' : ''}${ev.toFixed(2)}% EV</b></small>`;
   }
   function parlayRowMarkup(parlay) {
