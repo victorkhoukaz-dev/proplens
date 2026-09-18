@@ -75,6 +75,8 @@ Josh Allen,BUF,QB,NE,35.0,0.0
     assert data["positions"] == ["QB", "RB"]
     assert [player["player_name"] for player in data["players"]] == ["derrick henry", "saquon barkley"]
     assert data["players"][0]["projections"]["rushing_yards"] == 80.0
+    assert data["players"][0]["projections"]["rushing_receiving_yards"] == 88.0
+    assert data["players"][1]["projections"]["rushing_receiving_yards"] == 92.5
     assert {game["key"] for game in data["games"]} == {"BAL|KC", "BUF|NE", "DAL|PHI"}
 
     game_browser = client.get("/api/evaluator/browse?game=BAL%7CKC&sort_market=rushing_yards")

@@ -68,6 +68,8 @@
   let draftLegs = [];
   let playerMatches = [];
   let playerSearchTimer = null;
+  const safetyNet = window.proplensSafetyNet.mount($('.manual-parlay-financials'), {stake: () => Number($('#manual-parlay-stake').value), type: () => $('#manual-parlay-type').value, changed: updateReturnPreview});
+  const safetyPreview = document.createElement('div'); safetyNet.root.insertAdjacentElement('afterend', safetyPreview);
 
   const value = id => $(id).value.trim();
   const numberOrNull = id => value(id) === '' ? null : Number(value(id));
@@ -78,7 +80,7 @@
   function applyWeekSuggestion() { const season = Number(value('#manual-parlay-season')); const stored = Number(sessionStorage.getItem(`proplens-manual-week-${season}`)); const suggested = Number.isInteger(stored) && stored >= 1 && stored <= 25 ? stored : suggestedWeekForSeason(season); $('#manual-parlay-week').value = suggested || ''; weekHelp.textContent = stored ? `Using Week ${stored}, your last choice this session.` : suggested ? `Suggested Week ${suggested} from today's NFL calendar. You can change it.` : 'Choose the week manually for this season.'; }
   function rememberWeek() { const season = Number(value('#manual-parlay-season')), week = Number(value('#manual-parlay-week')); if (!Number.isInteger(season) || !Number.isInteger(week) || week < 1 || week > 25) return; sessionStorage.setItem(`proplens-manual-week-${season}`, String(week)); weekHelp.textContent = `Week ${week} will be used for new manual bets this session.`; }
   function updateSettlementVisibility() { $('#manual-parlay-settlement-field').hidden = !['cashed_out', 'push_adjusted', 'void_adjusted'].includes(status.value); }
-  function updateReturnPreview() { const odds = numberOrNull('#manual-parlay-odds'), stake = numberOrNull('#manual-parlay-stake'), boost = numberOrNull('#manual-parlay-boost') || 0, actual = numberOrNull('#manual-parlay-return'); const preview = $('#manual-parlay-return-preview'), isBonus = value('#manual-parlay-type') === 'bonus'; $('#manual-parlay-return-label').firstChild.textContent = isBonus ? 'Actual cash payout ' : 'Actual total return '; if (!odds || odds <= 1 || !stake || stake <= 0) { preview.textContent = 'Enter combined odds and stake to preview the result.'; return; } const effective = 1 + (odds - 1) * (1 + boost / 100); const payout = actual ?? stake * (isBonus ? effective - 1 : effective); const label = isBonus ? 'Potential cash payout' : 'Winning total return'; preview.textContent = actual !== null ? `${isBonus ? 'Exact cash payout' : 'Exact winning total return'}: $${payout.toFixed(2)} (your override).` : `${label}: $${payout.toFixed(2)} at ${effective.toFixed(2)} effective odds.${isBonus ? ' Bonus stake is not returned.' : ''}`; }
+  function updateReturnPreview() { safetyNet.sync(); safetyPreview.innerHTML = ''; const odds = numberOrNull('#manual-parlay-odds'), stake = numberOrNull('#manual-parlay-stake'), boost = numberOrNull('#manual-parlay-boost') || 0, actual = numberOrNull('#manual-parlay-return'); const preview = $('#manual-parlay-return-preview'), isBonus = value('#manual-parlay-type') === 'bonus'; $('#manual-parlay-return-label').firstChild.textContent = isBonus ? 'Actual cash payout ' : 'Actual total return '; if (!odds || odds <= 1 || !stake || stake <= 0) { preview.textContent = 'Enter combined odds and stake to preview the result.'; return; } const effective = 1 + (odds - 1) * (1 + boost / 100); const payout = actual ?? stake * (isBonus ? effective - 1 : effective); const label = isBonus ? 'Potential cash payout' : 'Winning total return'; preview.textContent = actual !== null ? `${isBonus ? 'Exact cash payout' : 'Exact winning total return'}: $${payout.toFixed(2)} (your override).` : `${label}: $${payout.toFixed(2)} at ${effective.toFixed(2)} effective odds.${isBonus ? ' Bonus stake is not returned.' : ''}`; try { safetyPreview.innerHTML = window.proplensSafetyNet.result(safetyNet.value(), stake, payout); } catch (error) { safetyPreview.textContent = error.message; } }
 
   function setLegMode(mode) {
     document.querySelectorAll('[data-leg-mode]').forEach(button => button.classList.toggle('active', button.dataset.legMode === mode));
@@ -152,7 +154,7 @@
   }
 
   function resetForm() {
-    form.reset(); editingId = null; draftLegs = []; $('#manual-parlay-season').value = '2026'; status.value = 'pending'; legCategory.value = 'player_prop';
+    form.reset(); safetyNet.set(null); editingId = null; draftLegs = []; $('#manual-parlay-season').value = '2026'; status.value = 'pending'; legCategory.value = 'player_prop';
     renderLegMarkets(); setLegMode('structured'); renderDraftLegs(); applyWeekSuggestion(); updateSettlementVisibility(); updateReturnPreview();
     $('#manual-parlay-title').textContent = 'Track a manual parlay'; $('#btn-save-manual-parlay').textContent = 'Save manual parlay';
   }
@@ -162,13 +164,14 @@
     if (draftLegs.length < 2) throw new Error('Add at least two parlay legs.');
     if ((season === null) !== (week === null)) throw new Error('Enter both season and NFL week, or leave both blank.');
     if (['cashed_out', 'push_adjusted', 'void_adjusted'].includes(status.value) && settlement === null) throw new Error('Enter the actual amount paid by Bet365.');
-    return { description: value('#manual-parlay-description') || null, legs: draftLegs, decimal_odds: Number(value('#manual-parlay-odds')), stake: Number(value('#manual-parlay-stake')), bet_type: value('#manual-parlay-type'), profit_boost_pct: numberOrNull('#manual-parlay-boost') || 0, actual_total_return: numberOrNull('#manual-parlay-return'), season, week, status: status.value, settlement_amount: settlement };
+    return { safety_net: safetyNet.value(), description: value('#manual-parlay-description') || null, legs: draftLegs, decimal_odds: Number(value('#manual-parlay-odds')), stake: Number(value('#manual-parlay-stake')), bet_type: value('#manual-parlay-type'), profit_boost_pct: numberOrNull('#manual-parlay-boost') || 0, actual_total_return: numberOrNull('#manual-parlay-return'), season, week, status: status.value, settlement_amount: settlement };
   }
 
   function openForEdit(parlay) {
     editingId = parlay.id;
     draftLegs = parlay.legs.map(leg => ({ entry_mode: leg.entry_mode || (leg.market === 'manual' ? 'free_text' : 'structured'), description: leg.description || leg.player_name, category: leg.category || null, player_name: leg.entry_mode === 'structured' ? leg.player_name : null, position: leg.position || leg.result_identity?.position || null, team: leg.team || null, opponent: leg.opponent || null, market: leg.market === 'manual' ? null : leg.market, side_label: leg.side_label || null, line: leg.line ?? null }));
     $('#manual-parlay-description').value = parlay.description || ''; $('#manual-parlay-odds').value = parlay.original_decimal_odds; $('#manual-parlay-stake').value = parlay.stake; $('#manual-parlay-type').value = parlay.bet_type; $('#manual-parlay-boost').value = parlay.profit_boost_pct || ''; $('#manual-parlay-return').value = parlay.actual_total_return ?? ''; $('#manual-parlay-season').value = parlay.season ?? ''; $('#manual-parlay-week').value = parlay.week ?? ''; status.value = parlay.status; $('#manual-parlay-settlement').value = parlay.settlement_amount ?? '';
+    safetyNet.set(parlay.safety_net);
     weekHelp.textContent = parlay.week ? `Saved Week ${parlay.week}. Editing does not change it automatically.` : 'No NFL week was saved for this record.';
     $('#manual-parlay-title').textContent = 'Edit manual parlay'; $('#btn-save-manual-parlay').textContent = 'Save changes'; renderDraftLegs(); updateSettlementVisibility(); updateReturnPreview(); modal.hidden = false;
   }

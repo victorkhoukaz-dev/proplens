@@ -14,7 +14,7 @@
   const recentStorageKey = 'proplens_recent_evaluated_players_v1';
   const preferredMarket = { QB: 'passing_yards', RB: 'rushing_yards', WR: 'receiving_yards', TE: 'receiving_yards' };
   const compactLabels = {
-    passing_yards: 'Pass', passing_tds: 'Pass TD', rushing_yards: 'Rush', rushing_attempts: 'Att',
+    passing_yards: 'Pass', passing_tds: 'Pass TD', rushing_yards: 'Rush', rushing_receiving_yards: 'R+R', rushing_attempts: 'Att',
     receiving_yards: 'Rec', receptions: 'Recs', anytime_td: 'TD',
   };
   let players = [];
@@ -82,14 +82,20 @@
       return;
     }
     list.innerHTML = players.map((player, index) => {
+      const rushReceiving = Number(player.projections?.rushing_receiving_yards);
+      const combined = Number.isFinite(rushReceiving)
+        ? `<span class="projection-value featured projection-value-derived">Rush+Rec<strong>${rushReceiving.toFixed(1)}</strong></span>`
+        : '';
       const values = Object.entries(player.projections || {})
-        .filter(([key]) => compactLabels[key])
+        // Keep Rush+Rec separate from the four compact slots below so it is
+        // always visible when both of its source projections exist.
+        .filter(([key]) => compactLabels[key] && key !== 'rushing_receiving_yards')
         .sort(([left], [right]) => (left === market.value ? -1 : right === market.value ? 1 : left.localeCompare(right)))
         .slice(0, 4)
         .map(([key, value]) => `<span class="projection-value${key === market.value ? ' featured' : ''}">${compactLabels[key]}<strong>${displayValue(key, value)}</strong></span>`)
         .join('');
       const matchup = player.opponent ? `${player.team} vs ${player.opponent}` : player.team;
-      return `<button class="projection-row" type="button" data-projection-player="${index}"><span class="projection-player"><strong>${escapeHtml(player.player_name)}</strong><small>${escapeHtml(player.position)} · ${escapeHtml(matchup)}</small></span><span class="projection-values">${values}</span></button>`;
+      return `<button class="projection-row" type="button" data-projection-player="${index}"><span class="projection-player"><strong>${escapeHtml(player.player_name)}</strong><small>${escapeHtml(player.position)} · ${escapeHtml(matchup)}</small></span><span class="projection-values">${combined}${values}</span></button>`;
     }).join('');
   }
 

@@ -17,7 +17,7 @@ from app.db.result_cache_store import result_cache_store
 from app.services.result_preview import ResultPreviewError, result_preview_service
 
 
-NFLVERSE_SCHEDULE_URL = "https://github.com/nflverse/nfldata/releases/download/schedules/games.csv"
+NFLVERSE_SCHEDULE_URL = "https://raw.githubusercontent.com/nflverse/nfldata/master/data/games.csv"
 SUPPORTED_MEAN_MARKETS = {
     "passing_yards": "passing yards",
     "rushing_yards": "rushing yards",
@@ -118,7 +118,7 @@ class ModelResearchService:
                 })
         return rows
 
-    def report(self, *, season: int | None = None, through_week: int | None = None, refresh: bool = False) -> dict[str, Any]:
+    def report(self, *, season: int | None = None, through_week: int | None = None, refresh: bool = False, include_records: bool = False) -> dict[str, Any]:
         snapshots = projection_snapshot_store.list()
         imported = self._snapshot_rows(snapshots, season, through_week)
         if not imported:
@@ -159,7 +159,7 @@ class ModelResearchService:
             imported_at = row["snapshot"].imported_at
             if imported_at.tzinfo is None:
                 imported_at = imported_at.replace(tzinfo=EASTERN)
-            if imported_at > game["kickoff"]:
+            if imported_at >= game["kickoff"]:
                 excluded["imported_after_kickoff"] += 1
                 continue
             row["kickoff"] = game["kickoff"]
@@ -227,6 +227,7 @@ class ModelResearchService:
         largest_errors = sorted(matched, key=lambda row: row["absolute_error"], reverse=True)[:10]
         return {
             "success": True,
+            **({"records": matched} if include_records else {}),
             "scope": {"season": season, "through_week": through_week},
             "coverage": {
                 "supported_imported_rows": len(imported),

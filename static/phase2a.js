@@ -117,6 +117,16 @@
     if (week !== 'all') return `All seasons · NFL Week ${week}`;
     return 'All NFL game weeks';
   }
+  function receivedSafetyNetBonusValue(sources) {
+    const season = trackerSeasonFilter.value, week = trackerWeekFilter.value;
+    return (sources || []).filter(source => {
+      if (!source.receipt) return false;
+      const hasContext = Number.isInteger(Number(source.season)) && Number.isInteger(Number(source.week));
+      if (season === 'unassigned' || week === 'unassigned') return !hasContext;
+      if (season !== 'all' && Number(source.season) !== Number(season)) return false;
+      return week === 'all' || Number(source.week) === Number(week);
+    }).reduce((total, source) => total + Number(source.receipt.amount || 0), 0);
+  }
   function summarizeActivity(activity) {
     const settled = activity.filter(item => item.status !== 'pending');
     const wagered = trackerIncludePending.checked ? activity : settled;
@@ -183,7 +193,7 @@
     const laterHistoryAction = laterEvaluations.length || refreshes.length ? `<button data-view-later-evaluations="${bet.id}">View evaluation history</button>` : '';
     const savedEvaluationAction = bet.entry_origin === 'evaluated' ? `<button data-view-saved-evaluation="${bet.id}">View original evaluation</button>` : '';
     const editAttribute = bet.entry_origin === 'manual' ? `data-edit-manual="${bet.id}"` : `data-edit="${bet.id}"`;
-    return `<details class="row-more"><summary aria-label="More actions for ${escapeHtml(bet.player_name)}">More</summary><div class="row-more-menu"><button ${editAttribute}>Edit</button>${savedEvaluationAction}${laterEvaluationAction}${laterHistoryAction}${pendingActions}<button class="danger-action" data-delete="${bet.id}">Delete</button></div></details>`;
+    return `<details class="row-more"><summary aria-label="More actions for ${escapeHtml(bet.player_name)}">More</summary><div class="row-more-menu"><button ${editAttribute}>Edit</button>${window.proplensPropProtect.action(bet, 'straight')}${savedEvaluationAction}${laterEvaluationAction}${laterHistoryAction}${pendingActions}<button class="danger-action" data-delete="${bet.id}">Delete</button></div></details>`;
   }
   function rowMarkup(bet) {
     const week = bet.result_identity?.week;
@@ -199,7 +209,7 @@
     const origin = bet.entry_origin === 'manual' ? `<span class="manual-entry-tag">Manual</span>${(bet.later_evaluations || []).length ? '<span class="later-evaluation-tag" title="Placed manually and evaluated later with imported projections">Later evaluated</span>' : ''}` : '<span class="evaluated-entry-tag">Evaluated</span>';
     const compactEvaluation = compactEvaluationMarkup(bet);
     const meta = compactEvaluation ? '' : `<small>${matchup}${Number(bet.decimal_odds).toFixed(2)} · ${bet.bet_type === 'bonus' ? 'Bonus' : 'Cash'} · ${money(bet.stake)}</small>`;
-    return `<article class="tracked-bet ${bet.status === 'pending' ? 'is-pending' : 'is-settled'}"><div class="bet-identity${compactEvaluation ? ' has-compact-evaluation' : ''}"${compactEvaluation ? ' style="flex-wrap:wrap"' : ''}>${origin}<strong>${escapeHtml(title)}</strong><span class="bet-prop">${escapeHtml(prop)}</span>${meta}${compactEvaluation}</div><div class="bet-status ${bet.status}"><span>${statusLabel(bet)}</span>${inlineSuggestionMarkup(bet)}${evidence}${settled ? `<strong class="${profit >= 0 ? 'positive' : 'negative'}">${profit >= 0 ? '+' : ''}${money(profit)}</strong>` : ''}</div><div class="settle-actions">${actions}</div></article>`;
+    return `<article class="tracked-bet ${bet.status === 'pending' ? 'is-pending' : 'is-settled'}"><div class="bet-identity${compactEvaluation ? ' has-compact-evaluation' : ''}"${compactEvaluation ? ' style="flex-wrap:wrap"' : ''}>${origin}<strong>${escapeHtml(title)}</strong><span class="bet-prop">${escapeHtml(prop)}</span>${meta}${compactEvaluation}${window.proplensPropProtect.badge(bet, 'straight')}</div><div class="bet-status ${bet.status}"><span>${statusLabel(bet)}</span>${inlineSuggestionMarkup(bet)}${evidence}${settled ? `<strong class="${profit >= 0 ? 'positive' : 'negative'}">${profit >= 0 ? '+' : ''}${money(profit)}</strong>` : ''}</div><div class="settle-actions">${actions}</div></article>`;
   }
   function parlayGameKey(leg) {
     const teams = [leg.team, leg.opponent].map(team => String(team || '').trim().toUpperCase()).filter(Boolean).sort();
@@ -243,12 +253,12 @@
     const suggestion = latestParlayResultPreviews.find(item => item.parlay_id === parlay.id);
     const canConfirm = parlay.status === 'pending' && suggestion?.status === 'proposal' && ['won', 'lost'].includes(suggestion.proposed_result);
     const editAttribute = parlay.entry_origin === 'manual' ? `data-manual-parlay-edit="${parlay.id}"` : `data-parlay-edit="${parlay.id}"`;
-    const manualActions = `<button class="settle-win" data-parlay-settle="won" data-parlay-id="${parlay.id}">Won</button><button data-parlay-settle="lost" data-parlay-id="${parlay.id}">Lost</button><button data-parlay-payout="cashed_out" data-parlay-id="${parlay.id}">Cash out</button><details class="row-more"><summary>More</summary><div class="row-more-menu"><button ${editAttribute}>Edit</button><button data-parlay-payout="push_adjusted" data-parlay-id="${parlay.id}">Push-adjusted</button><button data-parlay-payout="void_adjusted" data-parlay-id="${parlay.id}">Void-adjusted</button><button data-parlay-settle="cancelled" data-parlay-id="${parlay.id}">Cancel before start</button><button data-parlay-delete="${parlay.id}" class="danger-action">Delete</button></div></details>`;
-    const actions = canConfirm ? `<button class="settle-win confirm-result" data-confirm-parlay-preview="${parlay.id}" data-proposed-result="${suggestion.proposed_result}">Confirm ${suggestion.proposed_result[0].toUpperCase() + suggestion.proposed_result.slice(1)}</button><button data-parlay-payout="cashed_out" data-parlay-id="${parlay.id}">Cash out</button><details class="row-more"><summary>More</summary><div class="row-more-menu"><button ${editAttribute}>Edit</button><button data-parlay-payout="push_adjusted" data-parlay-id="${parlay.id}">Push-adjusted</button><button data-parlay-payout="void_adjusted" data-parlay-id="${parlay.id}">Void-adjusted</button><button data-parlay-settle="cancelled" data-parlay-id="${parlay.id}">Cancel before start</button><button data-parlay-delete="${parlay.id}" class="danger-action">Delete</button></div></details>` : manualActions;
+    const manualActions = `<button class="settle-win" data-parlay-settle="won" data-parlay-id="${parlay.id}">Won</button><button data-parlay-settle="lost" data-parlay-id="${parlay.id}">Lost</button><button data-parlay-payout="cashed_out" data-parlay-id="${parlay.id}">Cash out</button><details class="row-more"><summary>More</summary><div class="row-more-menu"><button ${editAttribute}>Edit</button>${window.proplensPropProtect.action(parlay, 'parlay')}<button data-parlay-payout="push_adjusted" data-parlay-id="${parlay.id}">Push-adjusted</button><button data-parlay-payout="void_adjusted" data-parlay-id="${parlay.id}">Void-adjusted</button><button data-parlay-settle="cancelled" data-parlay-id="${parlay.id}">Cancel before start</button><button data-parlay-delete="${parlay.id}" class="danger-action">Delete</button></div></details>`;
+    const actions = canConfirm ? `<button class="settle-win confirm-result" data-confirm-parlay-preview="${parlay.id}" data-proposed-result="${suggestion.proposed_result}">Confirm ${suggestion.proposed_result[0].toUpperCase() + suggestion.proposed_result.slice(1)}</button><button data-parlay-payout="cashed_out" data-parlay-id="${parlay.id}">Cash out</button><details class="row-more"><summary>More</summary><div class="row-more-menu"><button ${editAttribute}>Edit</button>${window.proplensPropProtect.action(parlay, 'parlay')}<button data-parlay-payout="push_adjusted" data-parlay-id="${parlay.id}">Push-adjusted</button><button data-parlay-payout="void_adjusted" data-parlay-id="${parlay.id}">Void-adjusted</button><button data-parlay-settle="cancelled" data-parlay-id="${parlay.id}">Cancel before start</button><button data-parlay-delete="${parlay.id}" class="danger-action">Delete</button></div></details>` : manualActions;
     const cashoutDetail = parlay.status === 'cashed_out' ? `<small>Received ${money(parlay.settlement_amount)}</small>` : '';
     const expanded = expandedParlayIds.has(parlay.id);
     const legToggle = `<button class="parlay-legs-toggle" data-toggle-parlay-legs="${parlay.id}" aria-expanded="${expanded}">Legs ${parlay.legs.length} ${expanded ? '▴' : '▾'}</button>`;
-    return `<article class="tracked-bet unified-parlay-card ${expanded ? 'is-expanded' : ''} ${parlay.status === 'pending' ? 'is-pending' : 'is-settled'}"><div class="bet-identity"><strong>${escapeHtml(title)}</strong>${meta}${compactEvaluation}</div><div class="bet-status ${parlay.status}"><span>${label}</span>${cashoutDetail}${settled ? `<strong class="${profit >= 0 ? 'positive' : 'negative'}">${profit >= 0 ? '+' : ''}${money(profit)}</strong>` : ''}</div><div class="settle-actions">${actions}${legToggle}</div><div class="unified-parlay-legs" ${expanded ? '' : 'hidden'}>${legRows}</div></article>`;
+    return `<article class="tracked-bet unified-parlay-card ${expanded ? 'is-expanded' : ''} ${parlay.status === 'pending' ? 'is-pending' : 'is-settled'}"><div class="bet-identity"><strong>${escapeHtml(title)}</strong>${meta}${compactEvaluation}${window.proplensSafetyNet.badge(parlay)}${window.proplensPropProtect.badge(parlay, 'parlay')}</div><div class="bet-status ${parlay.status}"><span>${label}</span>${cashoutDetail}${settled ? `<strong class="${profit >= 0 ? 'positive' : 'negative'}">${profit >= 0 ? '+' : ''}${money(profit)}</strong>` : ''}</div><div class="settle-actions">${actions}${legToggle}</div><div class="unified-parlay-legs" ${expanded ? '' : 'hidden'}>${legRows}</div></article>`;
   }
   function render(data) {
     latestTrackerData = data; window.proplensTrackedBets = data.bets; window.proplensTrackedParlays = data.parlays;
@@ -260,10 +270,11 @@
     const outcomeOnly = ['won', 'lost', 'cashed_out'].includes(trackerStatusFilter.value);
     const scopedPerformance = outcomeOnly || trackerMarketFilter.value !== 'all' || trackerSideFilter.value !== 'all';
     const s = summarizeActivity(scopedPerformance ? filteredActivity(activity) : reportActivity);
+    const bonusBetsReceived = receivedSafetyNetBonusValue([...(data.safety_net_sources || []), ...(data.prop_protect_sources || [])]);
     latestOverallSummary = s;
     const performance = value => outcomeOnly ? '—' : value;
     const profit = value => `<strong class="${outcomeOnly ? '' : value >= 0 ? 'positive' : 'negative'}">${outcomeOnly ? '—' : `${value >= 0 ? '+' : ''}${money(value)}`}</strong>`;
-    trackerSummary.innerHTML = `<div><span>${outcomeOnly ? 'Bets shown' : 'Pending'}</span><strong>${outcomeOnly ? s.activity_count : s.pending}</strong></div><div><span>Cash-bet P/L</span>${profit(s.cash_profit)}</div><div><span>Bonus-bet cash profit</span>${profit(s.bonus_profit)}</div><div><span>Total net profit</span>${profit(s.total_profit)}</div><div><span>Cash-bet ROI</span><strong>${performance(percent(s.cash_roi_pct))}</strong></div><div><span>Total ROI on cash risk</span><strong>${performance(percent(s.total_roi_on_cash_risk_pct))}</strong></div><div><span>Cash wagered</span><strong>${money(s.cash_wagered)}</strong></div><div><span>Bonus value used</span><strong>${money(s.bonus_value_used ?? s.bonus_stake_used)}</strong></div>`;
+    trackerSummary.innerHTML = `<div><span>${outcomeOnly ? 'Bets shown' : 'Pending'}</span><strong>${outcomeOnly ? s.activity_count : s.pending}</strong></div><div><span>Cash-bet P/L</span>${profit(s.cash_profit)}</div><div><span>Bonus-bet cash profit</span>${profit(s.bonus_profit)}</div><div><span>Total net profit</span>${profit(s.total_profit)}</div><div title="Confirmed Safety Net and Prop Protect credits. This is promo face value, not cash profit and not part of ROI."><span>Bonus bets received</span><strong class="positive">${money(bonusBetsReceived)}</strong></div><div><span>Cash-bet ROI</span><strong>${performance(percent(s.cash_roi_pct))}</strong></div><div><span>Total ROI on cash risk</span><strong>${performance(percent(s.total_roi_on_cash_risk_pct))}</strong></div><div><span>Cash wagered</span><strong>${money(s.cash_wagered)}</strong></div><div title="All tracked bonus-bet stakes, whether or not they have been linked to a promotion credit."><span>Bonus value wagered</span><strong>${money(s.bonus_value_used ?? s.bonus_stake_used)}</strong></div>`;
     trackerReportContext.textContent = reportContextLabel();
     trackerActivityFilter.disabled = !trackerIncludeParlays.checked;
     if (!trackerIncludeParlays.checked) trackerActivityFilter.value = 'straight';
@@ -341,15 +352,24 @@
   }
   async function loadTracker() {
     const pending = trackerIncludePending.checked, parlays = trackerIncludeParlays.checked;
-    const [trackerData, parlayData] = await Promise.all([
+    const [trackerData, parlayData, safetyNetData, propProtectData] = await Promise.all([
       api(`/api/tracker/bets?include_pending=${pending}`),
       parlays ? api(`/api/tracker/parlays?include_pending=${pending}`) : Promise.resolve({ parlays: [] }),
+      parlays ? api('/api/tracker/safety-nets') : Promise.resolve({ sources: [] }),
+      api('/api/tracker/prop-protect'),
     ]);
-    render({ ...trackerData, parlays: parlayData.parlays });
+    const safetyNetByParlayId = new Map((safetyNetData.sources || []).map(source => [source.id, source]));
+    const enrichedParlays = (parlayData.parlays || []).map(parlay => ({
+      ...parlay,
+      safety_net_summary: safetyNetByParlayId.get(parlay.id) || null,
+      prop_protect_summary: (propProtectData.sources || []).find(source => source.kind === 'parlay' && source.id === parlay.id) || null,
+    }));
+    const propProtectByBetId = new Map((propProtectData.sources || []).filter(source => source.kind === 'straight').map(source => [source.id, source]));
+    render({ ...trackerData, bets: (trackerData.bets || []).map(bet => ({...bet, prop_protect_summary: propProtectByBetId.get(bet.id) || null})), parlays: enrichedParlays, safety_net_sources: safetyNetData.sources || [], prop_protect_sources: propProtectData.sources || [] });
   }
   window.proplensRefreshTracker = loadTracker;
   const findBet = id => (window.proplensTrackedBets || []).find(bet => bet.id === id);
-  const supportedLaterEvaluationMarkets = new Set(['passing_yards', 'passing_tds', 'passing_interceptions', 'rushing_yards', 'rushing_attempts', 'receiving_yards', 'receptions', 'anytime_td']);
+  const supportedLaterEvaluationMarkets = new Set(['passing_yards', 'passing_tds', 'passing_interceptions', 'rushing_yards', 'rushing_receiving_yards', 'rushing_attempts', 'receiving_yards', 'receptions', 'anytime_td']);
   const normalizeName = value => String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
   async function openLaterEvaluation(bet) {
     if (!supportedLaterEvaluationMarkets.has(bet.market)) return toast('This manual market is not available in the projection evaluator yet.', true);

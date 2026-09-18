@@ -13,6 +13,9 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, Response, UploadFile
 from pydantic import BaseModel, field_validator
+from app.schemas.safety_net import SafetyNetFields
+from app.api.safety_net_routes import router as safety_net_router
+from app.api.prop_protect_routes import router as prop_protect_router
 
 from datetime import datetime, timezone
 
@@ -53,6 +56,8 @@ from app.services.threshold_board import ANYTIME_TD_MARKET, THRESHOLD_MARKETS, a
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["EV Betting API"])
+router.include_router(safety_net_router)
+router.include_router(prop_protect_router)
 
 
 
@@ -112,6 +117,7 @@ EVALUATOR_MARKETS: tuple[StatCategory, ...] = (
     StatCategory.PASSING_TDS,
     StatCategory.PASSING_INTERCEPTIONS,
     StatCategory.RUSHING_YARDS,
+    StatCategory.RUSHING_RECEIVING_YARDS,
     StatCategory.RUSHING_ATTEMPTS,
     StatCategory.RECEIVING_YARDS,
     StatCategory.RECEPTIONS,
@@ -337,7 +343,7 @@ class TrackedParlayLegRequest(BaseModel):
     result_identity: dict[str, Any] | None = None
 
 
-class TrackedParlayCreateRequest(BaseModel):
+class TrackedParlayCreateRequest(SafetyNetFields):
     legs: list[TrackedParlayLegRequest]
     original_decimal_odds: float
     effective_decimal_odds: float
@@ -418,7 +424,7 @@ class ManualTrackedParlayLegRequest(BaseModel):
         return cleaned or None
 
 
-class ManualTrackedParlayRequest(BaseModel):
+class ManualTrackedParlayRequest(SafetyNetFields):
     """A tracking-only parlay with guided or free-text legs and no model calculation."""
 
     description: str | None = None
@@ -518,7 +524,7 @@ class TrackedParlaySettleRequest(BaseModel):
         return value
 
 
-class TrackedParlayUpdateRequest(BaseModel):
+class TrackedParlayUpdateRequest(SafetyNetFields):
     bet_type: Literal["cash", "bonus"]
     stake: float
     original_decimal_odds: float
@@ -704,11 +710,86 @@ def _projection_key(projection: PlayerProjection) -> str:
 
 
 def _evaluator_projection(player_name: str, stat_category: StatCategory) -> PlayerProjection | None:
+    if stat_category == StatCategory.RUSHING_RECEIVING_YARDS:
+        return _rush_receiving_projection(player_name)
     requested_name = PlayerNameNormalizer.clean_name(player_name).lower()
     for projection in cache.get_projections():
         if projection.stat_category == stat_category and _projection_key(projection) == requested_name:
             return projection
     return None
+
+
+def _add_rush_receiving_market(player: dict[str, Any]) -> None:
+    """Expose a transparent derived mean when both source projections exist."""
+    projections = player["projections"]
+    rush_key = StatCategory.RUSHING_YARDS.value
+    receiving_key = StatCategory.RECEIVING_YARDS.value
+    if rush_key not in projections or receiving_key not in projections:
+        return
+    combined_key = StatCategory.RUSHING_RECEIVING_YARDS.value
+    projections[combined_key] = round(float(projections[rush_key]) + float(projections[receiving_key]), 2)
+    if combined_key not in player["markets"]:
+        player["markets"].append(combined_key)
+
+
+def _rush_receiving_projection(player_name: str) -> PlayerProjection | None:
+    """Build one safe, temporary Rush+Rec evaluator projection.
+
+    The mean is the exact sum of the active rushing and receiving projections.
+    Until historical calibration is available, its volatility uses the weighted
+    component CVs with a conservative perfect-positive-correlation assumption.
+    """
+    requested_name = PlayerNameNormalizer.clean_name(player_name).lower()
+    component_groups: dict[tuple[str, str, str], dict[StatCategory, PlayerProjection]] = {}
+    for projection in cache.get_projections():
+        if (
+            _projection_key(projection) != requested_name
+            or projection.stat_category not in {StatCategory.RUSHING_YARDS, StatCategory.RECEIVING_YARDS}
+        ):
+            continue
+        key = (projection.team.upper(), (projection.opponent or "").upper(), projection.position.upper())
+        group = component_groups.setdefault(key, {})
+        # Duplicate component rows are ambiguous; do not guess which to use.
+        if projection.stat_category in group:
+            return None
+        group[projection.stat_category] = projection
+
+    complete_groups = [
+        group for group in component_groups.values()
+        if StatCategory.RUSHING_YARDS in group and StatCategory.RECEIVING_YARDS in group
+    ]
+    if len(complete_groups) != 1:
+        return None
+
+    rush = complete_groups[0][StatCategory.RUSHING_YARDS]
+    receiving = complete_groups[0][StatCategory.RECEIVING_YARDS]
+    mean = rush.projection_mean + receiving.projection_mean
+    if mean <= 0:
+        return None
+    rush_cv = rush.projection_std if rush.projection_std and rush.projection_std > 0 else DistributionEngine.get_default_cv(stat_category=rush.stat_category)
+    receiving_cv = receiving.projection_std if receiving.projection_std and receiving.projection_std > 0 else DistributionEngine.get_default_cv(stat_category=receiving.stat_category)
+    provisional_cv = ((rush.projection_mean * rush_cv) + (receiving.projection_mean * receiving_cv)) / mean
+    return rush.model_copy(
+        update={
+            "stat_category": StatCategory.RUSHING_RECEIVING_YARDS,
+            "projection_mean": mean,
+            # DistributionEngine treats this field as its CV override.  The
+            # weighted sum is intentionally conservative until calibration.
+            "projection_std": provisional_cv,
+            "projection_median": None,
+            "projection_floor": None,
+            "projection_ceiling": None,
+            "metadata": {
+                **rush.metadata,
+                "derived_market": "rushing_receiving_yards",
+                "derived_from": {
+                    "rushing_yards": rush.projection_mean,
+                    "receiving_yards": receiving.projection_mean,
+                    "provisional_cv": provisional_cv,
+                },
+            },
+        }
+    )
 
 
 def _active_projection_context() -> dict[str, Any] | None:
@@ -922,6 +1003,7 @@ def _manual_parlay_record(payload: ManualTrackedParlayRequest) -> dict[str, Any]
     return {
         "entry_origin": "mixed" if has_evaluated_leg and has_manual_leg else "manual",
         "description": payload.description or f"{len(manual_legs)}-leg {'mixed' if has_evaluated_leg and has_manual_leg else 'manual'} parlay",
+        **({"safety_net": payload.safety_net.model_dump() if payload.safety_net else None} if "safety_net" in payload.model_fields_set else {}),
         "legs": manual_legs,
         "original_decimal_odds": payload.decimal_odds,
         "effective_decimal_odds": effective_odds,
@@ -1020,7 +1102,13 @@ def get_evaluator_players(q: str = Query("", max_length=80), limit: int = Query(
         if query and query not in search_text:
             continue
 
-        key = _projection_key(projection)
+        key = "|".join(
+            (
+                _projection_key(projection),
+                projection.team.upper(),
+                (projection.opponent or "").upper(),
+            )
+        )
         player = players.setdefault(
             key,
             {
@@ -1036,6 +1124,8 @@ def get_evaluator_players(q: str = Query("", max_length=80), limit: int = Query(
             player["markets"].append(projection.stat_category.value)
         player["projections"][projection.stat_category.value] = projection.projection_mean
 
+    for player in players.values():
+        _add_rush_receiving_market(player)
     ordered = sorted(players.values(), key=lambda player: player["player_name"].lower())[:limit]
     library = projection_snapshot_store.list_summaries()
     active_context = next(
@@ -1090,7 +1180,16 @@ def browse_evaluator_players(
             continue
 
         display_name = projection.canonical_name or projection.player_name
-        key = _projection_key(projection)
+        # The browser may show a derived Rush+Rec total, so its aggregation key
+        # must retain the exact matchup context instead of relying on the player
+        # name alone.
+        key = "|".join(
+            (
+                _projection_key(projection),
+                projection.team.upper(),
+                (projection.opponent or "").upper(),
+            )
+        )
         player = players.setdefault(
             key,
             {
@@ -1107,6 +1206,8 @@ def browse_evaluator_players(
             player["markets"].append(market)
         player["projections"][market] = projection.projection_mean
 
+    for player in players.values():
+        _add_rush_receiving_market(player)
     ordered = sorted(
         players.values(),
         key=lambda player: (
@@ -1304,6 +1405,12 @@ def evaluate_manual_prop(payload: PropEvaluationRequest) -> dict[str, Any]:
         "warnings": [
             "Model estimates can be wrong. Confirm the exact Bet365 player, market, side, line, and odds before betting.",
             "No sharp-book comparison was used for this result.",
+            *(
+                [
+                    "Rush + Receiving uses the exact summed projection. Its interim uncertainty rule is conservative but has not yet been calibrated against historical combined-yardage results."
+                ]
+                if payload.stat_category == StatCategory.RUSHING_RECEIVING_YARDS else []
+            ),
         ],
     }
 
@@ -1947,7 +2054,7 @@ def update_tracked_parlay(parlay_id: str, payload: TrackedParlayUpdateRequest) -
         parlay = parlay_tracker_store.update(
             parlay_id,
             {
-                **payload.model_dump(),
+                **payload.model_dump(exclude_unset=True),
                 "winning_total_return": round(winning_total_return, 2),
                 "winning_return_includes_stake": payload.bet_type == "cash",
             },
@@ -1965,6 +2072,8 @@ def delete_tracked_parlay(parlay_id: str) -> dict[str, Any]:
         parlay_tracker_store.delete(parlay_id)
     except TrackedParlayNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Tracked parlay not found.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"success": True, "summary": parlay_tracker_store.summary()}
 
 

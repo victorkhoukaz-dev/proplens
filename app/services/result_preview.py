@@ -20,6 +20,7 @@ NFLVERSE_PLAYER_STATS_URL = (
 SUPPORTED_MARKETS = {
     "passing_yards": ("passing_yards", "passing yards"),
     "rushing_yards": ("rushing_yards", "rushing yards"),
+    "rushing_receiving_yards": (None, "rushing + receiving yards"),
     "rushing_attempts": ("carries", "rushing attempts"),
     "receiving_yards": ("receiving_yards", "receiving yards"),
     "receptions": ("receptions", "receptions"),
@@ -88,6 +89,15 @@ class ResultPreviewService:
             season, week = _number(raw.get("season")), _number(raw.get("week"))
             if season is None or week is None:
                 continue
+            stats = {
+                **{market: _number(raw.get(source_field)) for market, (source_field, _) in SUPPORTED_MARKETS.items()},
+                **{key: _number(raw.get(key)) for key in TOUCHDOWN_STAT_FIELDS},
+            }
+            rushing = stats["rushing_yards"]
+            receiving = stats["receiving_yards"]
+            stats["rushing_receiving_yards"] = (
+                rushing + receiving if rushing is not None and receiving is not None else None
+            )
             rows.append(
                 {
                     "season": int(season),
@@ -95,10 +105,7 @@ class ResultPreviewService:
                     "player_key": PlayerNameNormalizer.clean_name(raw.get("player_display_name") or raw.get("player_name") or ""),
                     "team": TeamNormalizer.canonical_team(raw.get("team") or ""),
                     "opponent": TeamNormalizer.canonical_team(raw.get("opponent_team") or ""),
-                    "stats": {
-                        **{market: _number(raw.get(source_field)) for market, (source_field, _) in SUPPORTED_MARKETS.items()},
-                        **{key: _number(raw.get(key)) for key in TOUCHDOWN_STAT_FIELDS},
-                    },
+                    "stats": stats,
                 }
             )
         return rows

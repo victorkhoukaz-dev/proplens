@@ -148,6 +148,10 @@ class TestPlayerNameNormalizer:
 class TestTeamNormalizer:
     """Test suite for TeamNormalizer."""
 
+    @pytest.mark.parametrize("alias,canonical", [("HST", "HOU"), ("BLT", "BAL"), ("CLV", "CLE"), ("LA", "LAR")])
+    def test_projection_and_nflverse_aliases(self, alias, canonical):
+        assert TeamNormalizer.canonical_team(alias) == canonical
+
     def test_all_32_canonical_teams_exist(self):
         assert len(NFL_CANONICAL_TEAMS) == 32
         expected_teams = {

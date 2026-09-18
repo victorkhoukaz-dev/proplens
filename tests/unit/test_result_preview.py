@@ -64,6 +64,19 @@ def test_preview_proposes_rushing_attempts_from_nflverse_carries(monkeypatch):
     assert proposal["stat_label"] == "rushing attempts"
 
 
+def test_preview_proposes_rushing_plus_receiving_from_both_final_stats(monkeypatch):
+    content = FIXTURE.read_text(encoding="utf-8")
+    monkeypatch.setattr(result_preview_service, "_season_content", lambda season, refresh: (content, "2025-09-08T12:00:00+00:00", False))
+
+    report = result_preview_service.preview([pending_bet(market="rushing_receiving_yards", line=83.5)])
+
+    proposal = report["proposals"][0]
+    assert proposal["status"] == "proposal"
+    assert proposal["proposed_result"] == "won"
+    assert proposal["actual_stat"] == 84.0
+    assert proposal["stat_label"] == "rushing + receiving yards"
+
+
 def test_preview_never_assumes_missing_player_has_zero(monkeypatch):
     content = FIXTURE.read_text(encoding="utf-8")
     monkeypatch.setattr(result_preview_service, "_season_content", lambda season, refresh: (content, "2025-09-08T12:00:00+00:00", False))

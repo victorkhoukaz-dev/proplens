@@ -42,9 +42,11 @@ class ParlayTrackerStore:
             return sorted(self._read(), key=lambda item: item["created_at"], reverse=True)
 
     def create(self, parlay: dict[str, Any]) -> dict[str, Any]:
+        from app.services.safety_net import validate_record
         with self._lock:
             parlays = self._read()
             saved = {**parlay, "id": str(uuid.uuid4()), "status": "pending", "profit": None, "created_at": datetime.now(timezone.utc).isoformat(), "settled_at": None, "settlement_amount": None, "settlement_history": []}
+            validate_record(saved)
             parlays.append(saved)
             self._write(parlays)
             return saved
@@ -84,11 +86,13 @@ class ParlayTrackerStore:
         *,
         evidence: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        from app.services.safety_net import validate_record
         with self._lock:
             parlays = self._read()
             for parlay in parlays:
                 if parlay["id"] != parlay_id:
                     continue
+                validate_record({**parlay, "status": status})
                 profit = self._profit(parlay, status, settlement_amount)
                 settled_at = datetime.now(timezone.utc).isoformat()
                 history = list(parlay.get("settlement_history") or [])
@@ -100,11 +104,13 @@ class ParlayTrackerStore:
 
     def update(self, parlay_id: str, changes: dict[str, Any]) -> dict[str, Any]:
         """Correct financial details or the recorded result without changing the legs."""
+        from app.services.safety_net import validate_record
         with self._lock:
             parlays = self._read()
             for parlay in parlays:
                 if parlay["id"] != parlay_id:
                     continue
+                validate_record({**parlay, **changes})
                 parlay.update(changes)
                 status = parlay["status"]
                 if status == "pending":
@@ -119,6 +125,8 @@ class ParlayTrackerStore:
     def delete(self, parlay_id: str) -> None:
         with self._lock:
             parlays = self._read()
+            if any(p["id"] == parlay_id and p.get("safety_net_links") for p in parlays):
+                raise ValueError("Unlink the resulting bonus wagers before deleting this safety-net parlay.")
             remaining = [parlay for parlay in parlays if parlay["id"] != parlay_id]
             if len(remaining) == len(parlays):
                 raise TrackedParlayNotFoundError(parlay_id)

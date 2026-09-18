@@ -23,6 +23,7 @@ class StatCategory(str, Enum):
 
     # Rushing
     RUSHING_YARDS = "rushing_yards"
+    RUSHING_RECEIVING_YARDS = "rushing_receiving_yards"
     RUSHING_ATTEMPTS = "rushing_attempts"
     RUSHING_TDS = "rushing_tds"
 
@@ -52,6 +53,7 @@ class StatCategory(str, Enum):
             "player_pass_attempts": cls.PASSING_ATTEMPTS,
             "player_pass_completions": cls.PASSING_COMPLETIONS,
             "player_rush_yds": cls.RUSHING_YARDS,
+            "player_rush_rec_yds": cls.RUSHING_RECEIVING_YARDS,
             "player_rush_attempts": cls.RUSHING_ATTEMPTS,
             "player_rush_tds": cls.RUSHING_TDS,
             "player_rec_yds": cls.RECEIVING_YARDS,
@@ -126,6 +128,7 @@ class StatCategory(str, Enum):
             self.PASSING_ATTEMPTS: "player_pass_attempts",
             self.PASSING_COMPLETIONS: "player_pass_completions",
             self.RUSHING_YARDS: "player_rush_yds",
+            self.RUSHING_RECEIVING_YARDS: "player_rush_rec_yds",
             self.RUSHING_ATTEMPTS: "player_rush_attempts",
             self.RUSHING_TDS: "player_rush_tds",
             self.RECEIVING_YARDS: "player_rec_yds",
@@ -147,6 +150,7 @@ class StatCategory(str, Enum):
         return self in (
             StatCategory.PASSING_YARDS,
             StatCategory.RUSHING_YARDS,
+            StatCategory.RUSHING_RECEIVING_YARDS,
             StatCategory.RECEIVING_YARDS,
         )
 

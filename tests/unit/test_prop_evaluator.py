@@ -44,6 +44,24 @@ def evaluator_projections():
                 stat_category=StatCategory.PASSING_YARDS,
                 projection_mean=300.0,
             ),
+            PlayerProjection(
+                player_name="Saquon Barkley",
+                canonical_name="Saquon Barkley",
+                team="PHI",
+                opponent="DAL",
+                position="RB",
+                stat_category=StatCategory.RUSHING_YARDS,
+                projection_mean=70.5,
+            ),
+            PlayerProjection(
+                player_name="Saquon Barkley",
+                canonical_name="Saquon Barkley",
+                team="PHI",
+                opponent="DAL",
+                position="RB",
+                stat_category=StatCategory.RECEIVING_YARDS,
+                projection_mean=22.0,
+            ),
         ]
     )
     yield
@@ -94,6 +112,30 @@ def test_evaluator_requires_matching_projection(client):
     )
     assert response.status_code == 404
     assert "No matching projection" in response.json()["detail"]
+
+
+def test_evaluator_derives_rushing_plus_receiving_from_matching_components(client):
+    player = client.get("/api/evaluator/players?q=barkley").json()["players"][0]
+    assert player["projections"]["rushing_receiving_yards"] == 92.5
+    assert "rushing_receiving_yards" in player["markets"]
+
+    response = client.post(
+        "/api/evaluator/evaluate",
+        json={
+            "player_name": "Saquon Barkley",
+            "stat_category": "rushing_receiving_yards",
+            "side": "over",
+            "line": 85.5,
+            "odds": 1.86,
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["prop"]["market"] == "rushing_receiving_yards"
+    assert data["projection"]["mean"] == 92.5
+    assert 0 < data["model"]["win_probability"] < 1
+    assert any("not yet been calibrated" in warning for warning in data["warnings"])
 
 
 def test_evaluator_handles_a_low_yardage_line_without_invalid_fair_price(client):

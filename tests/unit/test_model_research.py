@@ -66,6 +66,19 @@ def test_research_uses_latest_projection_before_kickoff_and_reports_mean_metrics
         "rmse": 2.0,
     }]
     assert report["largest_errors"][0]["snapshot_label"] == "Late"
+    detailed = model_research_service.report(season=2026, through_week=2, include_records=True)
+    assert len(detailed["records"]) == 1
+    assert detailed["records"][0]["snapshot_id"] == "Late"
+    assert "records" not in report
+
+
+def test_research_rejects_import_at_exact_kickoff(monkeypatch):
+    at_kickoff = snapshot("Kickoff", datetime(2026, 9, 13, 17, tzinfo=timezone.utc), 65)
+    monkeypatch.setattr(projection_snapshot_store, "list", lambda: [at_kickoff])
+    monkeypatch.setattr(model_research_service, "_schedule_content", lambda refresh: (SCHEDULE, "test", True))
+    report = model_research_service.report(season=2026, through_week=2)
+    assert report["coverage"]["selected_pre_kickoff_rows"] == 0
+    assert report["coverage"]["excluded"] == {"imported_after_kickoff": 1}
 
 
 def test_research_excludes_missing_or_ambiguous_final_player_stats(monkeypatch):

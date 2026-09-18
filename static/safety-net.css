@@ -1,0 +1,18 @@
+.safety-net-input { margin:16px 0; padding:14px; border:1px solid #293652; border-radius:10px; }
+.safety-net-toggle { display:flex !important; align-items:center; gap:10px; font-size:13px; cursor:pointer; }
+.safety-net-toggle input { width:16px; height:16px; margin:0; accent-color:#75f0b4; }
+.sn-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; margin-top:14px; }
+.sn-grid label { display:flex; flex-direction:column; gap:7px; }
+.safety-net-result { margin:14px 0; padding:14px; border:1px solid #354561; border-radius:10px; background:rgba(139,197,255,.055); }
+.safety-net-result p { margin:8px 0; font-size:13px; }
+.safety-net-result small { color:#98a6bf; line-height:1.5; }
+.safety-net-badge { display:block; width:fit-content; max-width:100%; margin-top:7px; padding:5px 8px; border:1px solid #354561; border-radius:7px; background:rgba(139,197,255,.08); color:#8bc5ff; font-size:11px; text-align:left; cursor:pointer; }
+.safety-net-card { width:min(580px,95vw); }
+.safety-net-card label { display:flex; flex-direction:column; gap:7px; margin:12px 0; }
+.safety-net-card select { width:100%; min-width:0; }
+.safety-net-card button[data-sn-action] { border:1px solid #354561; border-radius:7px; padding:9px 12px; background:#121a2d; color:#f4f7fb; cursor:pointer; }
+.safety-net-card button:disabled { opacity:.45; cursor:default; }
+.sn-actions { display:flex; flex-wrap:wrap; gap:8px; }
+.sn-links > div { margin-top:14px; padding-top:12px; border-top:1px solid #293652; }
+#sn-error { color:#ff8d9b; }
+@media(max-width:540px) { .sn-grid { grid-template-columns:1fr; } }

@@ -273,6 +273,8 @@ NFL_CANONICAL_TEAMS: Set[str] = {
 }
 
 NFL_TEAM_LOOKUP: Dict[str, str] = {
+    # FantasyPoints and nflverse provider abbreviations.
+    "HST": "HOU", "BLT": "BAL", "CLV": "CLE", "LA": "LAR",
     # AFC East
     "BUF": "BUF", "BUFFALO": "BUF", "BUFFALO BILLS": "BUF", "BILLS": "BUF",
     "MIA": "MIA", "MIAMI": "MIA", "MIAMI DOLPHINS": "MIA", "DOLPHINS": "MIA",
