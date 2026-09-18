@@ -117,15 +117,19 @@
     if (week !== 'all') return `All seasons · NFL Week ${week}`;
     return 'All NFL game weeks';
   }
-  function receivedSafetyNetBonusValue(sources) {
+  function bonusCreditSummary(sources) {
     const season = trackerSeasonFilter.value, week = trackerWeekFilter.value;
-    return (sources || []).filter(source => {
+    const scopedSources = (sources || []).filter(source => {
       if (!source.receipt) return false;
       const hasContext = Number.isInteger(Number(source.season)) && Number.isInteger(Number(source.week));
       if (season === 'unassigned' || week === 'unassigned') return !hasContext;
       if (season !== 'all' && Number(source.season) !== Number(season)) return false;
       return week === 'all' || Number(source.week) === Number(week);
-    }).reduce((total, source) => total + Number(source.receipt.amount || 0), 0);
+    });
+    return {
+      received: scopedSources.reduce((total, source) => total + Number(source.receipt.amount || 0), 0),
+      unlinked: scopedSources.reduce((total, source) => total + Number(source.remaining || 0), 0),
+    };
   }
   function summarizeActivity(activity) {
     const settled = activity.filter(item => item.status !== 'pending');
@@ -270,11 +274,11 @@
     const outcomeOnly = ['won', 'lost', 'cashed_out'].includes(trackerStatusFilter.value);
     const scopedPerformance = outcomeOnly || trackerMarketFilter.value !== 'all' || trackerSideFilter.value !== 'all';
     const s = summarizeActivity(scopedPerformance ? filteredActivity(activity) : reportActivity);
-    const bonusBetsReceived = receivedSafetyNetBonusValue([...(data.safety_net_sources || []), ...(data.prop_protect_sources || [])]);
+    const bonusCredits = bonusCreditSummary([...(data.safety_net_sources || []), ...(data.prop_protect_sources || [])]);
     latestOverallSummary = s;
     const performance = value => outcomeOnly ? '—' : value;
     const profit = value => `<strong class="${outcomeOnly ? '' : value >= 0 ? 'positive' : 'negative'}">${outcomeOnly ? '—' : `${value >= 0 ? '+' : ''}${money(value)}`}</strong>`;
-    trackerSummary.innerHTML = `<div><span>${outcomeOnly ? 'Bets shown' : 'Pending'}</span><strong>${outcomeOnly ? s.activity_count : s.pending}</strong></div><div><span>Cash-bet P/L</span>${profit(s.cash_profit)}</div><div><span>Bonus-bet cash profit</span>${profit(s.bonus_profit)}</div><div><span>Total net profit</span>${profit(s.total_profit)}</div><div title="Confirmed Safety Net and Prop Protect credits. This is promo face value, not cash profit and not part of ROI."><span>Bonus bets received</span><strong class="positive">${money(bonusBetsReceived)}</strong></div><div><span>Cash-bet ROI</span><strong>${performance(percent(s.cash_roi_pct))}</strong></div><div><span>Total ROI on cash risk</span><strong>${performance(percent(s.total_roi_on_cash_risk_pct))}</strong></div><div><span>Cash wagered</span><strong>${money(s.cash_wagered)}</strong></div><div title="All tracked bonus-bet stakes, whether or not they have been linked to a promotion credit."><span>Bonus value wagered</span><strong>${money(s.bonus_value_used ?? s.bonus_stake_used)}</strong></div>`;
+    trackerSummary.innerHTML = `<div><span>${outcomeOnly ? 'Bets shown' : 'Pending'}</span><strong>${outcomeOnly ? s.activity_count : s.pending}</strong></div><div><span>Cash-bet P/L</span>${profit(s.cash_profit)}</div><div><span>Bonus-bet cash profit</span>${profit(s.bonus_profit)}</div><div><span>Total net profit</span>${profit(s.total_profit)}</div><div title="Confirmed Safety Net and Prop Protect credits. This is promo face value, not cash profit and not part of ROI."><span>Bonus bets received</span><strong class="positive">${money(bonusCredits.received)}</strong><small class="bonus-credit-balance">Unlinked: ${money(bonusCredits.unlinked)}</small></div><div><span>Cash-bet ROI</span><strong>${performance(percent(s.cash_roi_pct))}</strong></div><div><span>Total ROI on cash risk</span><strong>${performance(percent(s.total_roi_on_cash_risk_pct))}</strong></div><div><span>Cash wagered</span><strong>${money(s.cash_wagered)}</strong></div><div title="All tracked bonus-bet stakes, whether or not they have been linked to a promotion credit."><span>Bonus value wagered</span><strong>${money(s.bonus_value_used ?? s.bonus_stake_used)}</strong></div>`;
     trackerReportContext.textContent = reportContextLabel();
     trackerActivityFilter.disabled = !trackerIncludeParlays.checked;
     if (!trackerIncludeParlays.checked) trackerActivityFilter.value = 'straight';

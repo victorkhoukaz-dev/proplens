@@ -15,9 +15,14 @@ def _store(kind: Kind):
 
 
 def _title(ticket: dict[str, Any]) -> str:
+    if ticket.get("description"):
+        return ticket["description"]
     if "legs" in ticket:
-        return ticket.get("description") or f"{len(ticket['legs'])}-leg parlay"
-    return ticket.get("description") or ticket.get("player_name") or "Tracked bet"
+        return " / ".join(
+            leg.get("description") or leg.get("player_name", "Leg")
+            for leg in ticket["legs"]
+        )
+    return ticket.get("player_name") or "Tracked bet"
 
 
 def overview() -> dict[str, Any]:
@@ -44,7 +49,10 @@ def overview() -> dict[str, Any]:
                 contexts = [(leg.get("result_identity", {}).get("season"), leg.get("result_identity", {}).get("week")) for leg in source.get("legs", [])]
                 if contexts and all(context == contexts[0] for context in contexts): season, week = contexts[0]
             sources.append({"kind": kind, "id": source["id"], "description": _title(source), "status": source["status"], "season": season, "week": week, "receipt": receipt, "remaining": round(receipt["amount"] - allocated, 2), "links": links})
-    candidates = [{"kind": kind, "ticket_id": id_, "description": _title(ticket), "stake": ticket["stake"], "status": ticket["status"]} for (kind, id_), ticket in destinations.items() if ticket["bet_type"] == "bonus" and ticket["status"] != "cancelled" and (kind, id_) not in linked]
+    candidates = [{"kind": kind, "ticket_id": id_, "description": _title(ticket), "stake": ticket["stake"],
+                   "status": ticket["status"], "created_at": ticket["created_at"]}
+                  for (kind, id_), ticket in destinations.items()
+                  if ticket["bet_type"] == "bonus" and ticket["status"] != "cancelled" and (kind, id_) not in linked]
     return {"sources": sources, "candidates": candidates}
 
 

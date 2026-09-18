@@ -13,3 +13,4 @@
 .overall-performance{display:none!important}
 .bet-identity.has-compact-evaluation{flex-wrap:wrap}.compact-evaluation{display:block!important;flex:0 0 100%!important;min-width:0!important;overflow:hidden!important;margin-top:3px!important;color:#b6c5dc!important;font:500 10px var(--mono)!important;text-overflow:ellipsis!important;white-space:nowrap!important}.compact-evaluation span{color:#8bc5ff}.compact-evaluation b{font:inherit}.tracked-bet:has(.compact-evaluation){min-height:61px}@media(max-width:760px){.compact-evaluation{white-space:normal!important;line-height:1.4}.tracked-bet:has(.compact-evaluation){min-height:unset}}
 @media(min-width:1051px){.tracker-summary{grid-template-columns:repeat(9,minmax(0,1fr))}}
+.bonus-credit-balance{display:block;margin-top:2px;color:#8bc5ff;font:500 9px var(--mono);white-space:nowrap}
