@@ -103,5 +103,5 @@
     } catch (error) { $('#sn-content').textContent = ''; $('#sn-error').textContent = error.message; }
   }
   document.addEventListener('click', event => { const source = event.target.closest('[data-safety-net]'); if (source) open(source.dataset.safetyNet); const bonus = event.target.closest('[data-safety-net-bonus]'); if (bonus) open(null, {kind:bonus.dataset.bonusKind, ticket_id:bonus.dataset.safetyNetBonus}); });
-  window.proplensSafetyNet = {mount, result, badge, estimate};
+  window.proplensSafetyNet = {mount, result, badge, estimate, open};
 })();

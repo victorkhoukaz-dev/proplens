@@ -21,5 +21,5 @@
     document.querySelector('#pp-link')?.addEventListener('click', async () => { try { const [targetKind,ticketId]=(document.querySelector('#pp-candidate').value||':').split(':'); if(!ticketId) throw new Error('Choose a tracked bonus wager.'); await api(`/api/tracker/prop-protect/${kind}/${id}/link`,{kind:targetKind,ticket_id:ticketId}); await window.proplensRefreshTracker(); open(kind,id); } catch(e){error.textContent=e.message;} });
   } catch(e){content.textContent='';error.textContent=e.message;} }
   document.addEventListener('click', event=>{const button=event.target.closest('[data-prop-protect]'); if(button) open(button.dataset.propProtectKind,button.dataset.propProtect);});
-  window.proplensPropProtect={badge,action};
+  window.proplensPropProtect={badge,action,open};
 })();

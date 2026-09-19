@@ -23,7 +23,7 @@
             <div class="manual-leg-section-title"><div><strong>Parlay legs</strong><span id="manual-parlay-leg-count">0 of 10 added</span></div><div class="manual-leg-mode" role="group" aria-label="Leg entry method"><button type="button" class="active" data-leg-mode="structured">Guided leg</button><button type="button" data-leg-mode="free_text">Free-text leg</button></div></div>
             <div id="manual-structured-leg" class="manual-leg-builder">
               <label>Category<select id="manual-leg-category"><option value="player_prop">Player prop</option><option value="game_bet">Game bet</option><option value="custom">Other / custom</option></select></label>
-              <label class="manual-leg-player-field">Player<input id="manual-leg-player" class="number-input" list="manual-leg-player-options" autocomplete="off" placeholder="Type or choose an imported player"><datalist id="manual-leg-player-options"></datalist></label>
+              <label class="manual-leg-player-field">Player<input id="manual-leg-player" class="number-input" list="manual-leg-player-options" autocomplete="off" placeholder="Type or choose a player"><datalist id="manual-leg-player-options"></datalist><small class="manual-player-source" id="manual-leg-player-source"></small></label>
               <label class="manual-leg-player-field">Position<select id="manual-leg-position"><option value="">Optional</option><option>QB</option><option>RB</option><option>WR</option><option>TE</option><option>K</option><option>DL</option><option>LB</option><option>DB</option><option>Other</option></select></label>
               <label>Market<select id="manual-leg-market"></select></label>
               <label class="manual-leg-selection-field">Side / selection<select id="manual-leg-side"><option value="Over">Over</option><option value="Under">Under</option><option value="Yes">Yes</option><option value="No">No</option><option value="Home">Home</option><option value="Away">Away</option><option value="Other">Other</option></select></label>
@@ -105,21 +105,33 @@
   async function searchLegPlayers() {
     const query = value('#manual-leg-player');
     try {
-      const data = await api(`/api/evaluator/players?q=${encodeURIComponent(query)}&limit=20`);
-      playerMatches = data.players || [];
-      $('#manual-leg-player-options').innerHTML = playerMatches.map(player => `<option value="${escapeHtml(player.player_name)}">${escapeHtml(player.team)} · ${escapeHtml(player.position)}</option>`).join('');
+      const [projectionData, directoryData] = await Promise.all([
+        api(`/api/evaluator/players?q=${encodeURIComponent(query)}&limit=20`),
+        api(`/api/player-directory/search?q=${encodeURIComponent(query)}&limit=20`),
+      ]);
+      const projectionPlayers = (projectionData.players || []).map(player => ({ ...player, source: 'projection' }));
+      const projectionKeys = new Set(projectionPlayers.map(player => `${String(player.player_name).toLowerCase()}|${player.team}`));
+      const directoryPlayers = (directoryData.players || [])
+        .filter(player => !projectionKeys.has(`${String(player.player_name).toLowerCase()}|${player.team}`))
+        .map(player => ({ ...player, source: 'directory', markets: [] }));
+      playerMatches = [...projectionPlayers, ...directoryPlayers];
+      $('#manual-leg-player-options').innerHTML = playerMatches.map(player => `<option value="${escapeHtml(player.player_name)}">${escapeHtml(player.team)} · ${escapeHtml(player.position)} · ${player.source === 'projection' ? 'Active projection' : 'Player directory — no projection'}</option>`).join('');
       applyLegPlayerSuggestion();
-    } catch (_) { playerMatches = []; }
+    } catch (_) { playerMatches = []; $('#manual-leg-player-options').innerHTML = ''; }
   }
 
   function applyLegPlayerSuggestion() {
     const typed = value('#manual-leg-player').toLowerCase();
     const match = playerMatches.find(player => player.player_name.toLowerCase() === typed);
-    if (!match) return;
+    const source = $('#manual-leg-player-source');
+    if (!match) { source.textContent = ''; source.classList.remove('directory'); return; }
     $('#manual-leg-team').value = match.team || '';
-    $('#manual-leg-opponent').value = match.opponent || '';
-    $('#manual-leg-position').value = match.position || '';
+    if (match.source === 'projection') $('#manual-leg-opponent').value = match.opponent || '';
+    const positionOption = [...$('#manual-leg-position').options].find(option => option.value === match.position);
+    $('#manual-leg-position').value = positionOption ? match.position : 'Other';
     applyDefaultLegMarket();
+    source.textContent = match.source === 'projection' ? 'Active projection match — use the evaluator when you are ready.' : 'Player directory — no projection loaded. This remains a tracking-only manual parlay leg.';
+    source.classList.toggle('directory', match.source === 'directory');
   }
 
   function generatedLegDescription() {
@@ -155,6 +167,7 @@
 
   function resetForm() {
     form.reset(); safetyNet.set(null); editingId = null; draftLegs = []; $('#manual-parlay-season').value = '2026'; status.value = 'pending'; legCategory.value = 'player_prop';
+    $('#manual-leg-player-source').textContent = ''; $('#manual-leg-player-source').classList.remove('directory');
     renderLegMarkets(); setLegMode('structured'); renderDraftLegs(); applyWeekSuggestion(); updateSettlementVisibility(); updateReturnPreview();
     $('#manual-parlay-title').textContent = 'Track a manual parlay'; $('#btn-save-manual-parlay').textContent = 'Save manual parlay';
   }
