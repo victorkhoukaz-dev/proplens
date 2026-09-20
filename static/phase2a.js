@@ -27,11 +27,18 @@
     trackerMarketFilter.insertAdjacentElement('afterend', select);
     return select;
   })();
-  let selectedBet = null, selectedLaterEvaluationBet = null, laterEvaluationPlayers = [], latestTrackerData = null, latestOverallSummary = null, latestResultPreview = null, latestParlayResultPreviews = [], latestBatchEvaluationPreview = null, showingSuggestionsOnly = false, visibleParlayIds = [];
+  let selectedBet = null, selectedLaterEvaluationBet = null, laterEvaluationPlayers = [], latestTrackerData = null, latestOverallSummary = null, latestResultPreview = null, latestParlayResultPreviews = [], latestBatchEvaluationPreview = null, showingSuggestionsOnly = false, visibleParlayIds = [], pendingAnalysisActivity = [];
   const promoCreditModal = (() => {
     document.body.insertAdjacentHTML('beforeend', '<div class="modal-backdrop" id="promo-credit-modal" hidden><section class="modal-card safety-net-card" role="dialog" aria-modal="true" aria-labelledby="promo-credit-title"><button type="button" class="modal-close" id="promo-credit-close" aria-label="Close">×</button><h2 id="promo-credit-title">Promo credits to link</h2><p class="field-help">Choose a Safety Net or Prop Protect credit to open its linking workflow.</p><div id="promo-credit-list" class="promo-credit-list"></div></section></div>');
     const modal = $('#promo-credit-modal');
     $('#promo-credit-close').onclick = () => { modal.hidden = true; };
+    modal.addEventListener('click', event => { if (event.target === modal) modal.hidden = true; });
+    return modal;
+  })();
+  const pendingAnalysisModal = (() => {
+    document.body.insertAdjacentHTML('beforeend', '<div class="modal-backdrop" id="pending-analysis-modal" hidden><section class="modal-card pending-analysis-card" role="dialog" aria-modal="true" aria-labelledby="pending-analysis-title"><button type="button" class="modal-close" id="pending-analysis-close" aria-label="Close">×</button><p class="eyebrow">LIVE TICKET REVIEW</p><h2 id="pending-analysis-title">Pending-bet overview</h2><p id="pending-analysis-context" class="field-help"></p><div id="pending-analysis-content"></div></section></div>');
+    const modal = $('#pending-analysis-modal');
+    $('#pending-analysis-close').onclick = () => { modal.hidden = true; };
     modal.addEventListener('click', event => { if (event.target === modal) modal.hidden = true; });
     return modal;
   })();
@@ -43,6 +50,15 @@
     button.className = 'tracker-check-results';
     button.textContent = 'Expand all parlays';
     button.hidden = true;
+    checkResults.insertAdjacentElement('beforebegin', button);
+    return button;
+  })();
+  const analyzePendingButton = (() => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.id = 'btn-analyze-pending';
+    button.className = 'tracker-check-results';
+    button.textContent = 'Analyze pending bets';
     checkResults.insertAdjacentElement('beforebegin', button);
     return button;
   })();
@@ -186,6 +202,59 @@
     const pendingCash = activity.filter(item => item.status === 'pending' && item.bet_type === 'cash' && item.status !== 'cancelled');
     return { activity_count: activity.length, pending: activity.filter(item => item.status === 'pending').length, pending_cash_count: pendingCash.length, pending_cash_at_risk: pendingCash.reduce((total, item) => total + Number(item.stake || 0), 0), cash_profit: cashProfit, bonus_profit: bonusProfit, total_profit: totalProfit, cash_wagered: cashWagered.reduce((total, item) => total + Number(item.stake || 0), 0), bonus_value_used: bonusWagered.reduce((total, item) => total + Number(item.stake || 0), 0), cash_roi_pct: cashStaked ? cashProfit / cashStaked * 100 : null, total_roi_on_cash_risk_pct: cashStaked ? totalProfit / cashStaked * 100 : null };
   }
+  function pendingAnalysisGroups(activity) {
+    const players = new Map(), games = new Map(), markets = new Map();
+    const ticketKey = ticket => `${ticket.activity_type}:${ticket.id}`;
+    const addTicket = (groups, key, label, ticket, market = null) => {
+      if (!key || !label) return;
+      const entry = groups.get(key) || { key, label, tickets: new Set(), cashStake: 0, bonusStake: 0, markets: new Set() };
+      const id = ticketKey(ticket);
+      if (!entry.tickets.has(id)) {
+        entry.tickets.add(id);
+        if (ticket.bet_type === 'cash') entry.cashStake += Number(ticket.stake || 0);
+        else entry.bonusStake += Number(ticket.stake || 0);
+      }
+      if (market) entry.markets.add(market);
+      groups.set(key, entry);
+    };
+    activity.forEach(ticket => {
+      const legs = ticket.activity_type === 'parlay' ? ticket.legs || [] : [ticket];
+      const seenPlayers = new Set(), seenGames = new Set(), seenMarkets = new Set();
+      legs.forEach(leg => {
+        const player = String(leg.player_name || '').trim();
+        const playerKey = player.toLowerCase().replace(/[^a-z0-9]/g, '');
+        const market = leg.market ? marketLabel(leg.market) : '';
+        const game = gameFilterOption(leg.team, leg.opponent);
+        if (playerKey && playerKey !== 'leg' && !seenPlayers.has(playerKey)) {
+          addTicket(players, playerKey, player, ticket, market); seenPlayers.add(playerKey);
+        }
+        if (game && !seenGames.has(game.key)) { addTicket(games, game.key, game.label, ticket); seenGames.add(game.key); }
+        if (market && !seenMarkets.has(market)) { addTicket(markets, market, market, ticket); seenMarkets.add(market); }
+      });
+    });
+    const ranked = groups => [...groups.values()].sort((left, right) => right.tickets.size - left.tickets.size || right.cashStake - left.cashStake || left.label.localeCompare(right.label));
+    return { players: ranked(players), games: ranked(games), markets: ranked(markets), repeats: ranked(players).filter(entry => entry.tickets.size > 1) };
+  }
+  function exposureDetails(entry, includeMarkets = true) {
+    const parts = [`${entry.tickets.size} pending ticket${entry.tickets.size === 1 ? '' : 's'}`];
+    if (entry.cashStake) parts.push(`cash ${money(entry.cashStake)}`);
+    if (entry.bonusStake) parts.push(`bonus ${money(entry.bonusStake)}`);
+    if (includeMarkets && entry.markets.size) parts.push([...entry.markets].join(', '));
+    return parts.join(' · ');
+  }
+  function pendingAnalysisRows(entries, options = {}) {
+    const { limit = 3, warning = false, includeMarkets = true } = options;
+    if (!entries.length) return '<p class="field-help">No pending tickets with enough information to group here.</p>';
+    return entries.slice(0, limit).map(entry => `<div class="pending-analysis-row"><div><strong>${escapeHtml(entry.label)}</strong><small>${escapeHtml(exposureDetails(entry, includeMarkets))}</small></div>${warning ? `<button type="button" data-pending-analysis-search="${escapeHtml(entry.label)}">Show tickets</button>` : ''}</div>`).join('');
+  }
+  function openPendingAnalysis() {
+    const groups = pendingAnalysisGroups(pendingAnalysisActivity);
+    const cashTickets = pendingAnalysisActivity.filter(ticket => ticket.bet_type === 'cash'), bonusTickets = pendingAnalysisActivity.filter(ticket => ticket.bet_type === 'bonus'), parlays = pendingAnalysisActivity.filter(ticket => ticket.activity_type === 'parlay');
+    const cashRisk = cashTickets.reduce((total, ticket) => total + Number(ticket.stake || 0), 0);
+    $('#pending-analysis-context').textContent = `${pendingAnalysisActivity.length} pending ticket${pendingAnalysisActivity.length === 1 ? '' : 's'} · ${reportContextLabel()}. Ticket stake can appear under more than one player or game; those row amounts are not totals to add together.`;
+    $('#pending-analysis-content').innerHTML = `<div class="pending-analysis-summary"><div><span>Cash at risk</span><strong>${money(cashRisk)}</strong></div><div><span>Cash tickets</span><strong>${cashTickets.length}</strong></div><div><span>Bonus tickets</span><strong>${bonusTickets.length}</strong></div><div><span>Parlays</span><strong>${parlays.length}</strong></div></div><section class="pending-analysis-section"><h3>Review repeated players</h3><p>A player appears in more than one pending ticket. Markets are shown so you can decide whether it was intentional.</p>${pendingAnalysisRows(groups.repeats, {limit: 5, warning: true})}</section><div class="pending-analysis-columns"><section class="pending-analysis-section"><h3>Top players</h3>${pendingAnalysisRows(groups.players)}</section><section class="pending-analysis-section"><h3>Top games</h3>${pendingAnalysisRows(groups.games, {includeMarkets: false})}</section><section class="pending-analysis-section"><h3>Markets used</h3>${pendingAnalysisRows(groups.markets, {includeMarkets: false})}</section></div>`;
+    pendingAnalysisModal.hidden = false;
+  }
   function filteredActivity(activity) {
     const search = trackerSearch.value.trim().toLowerCase(), activityType = trackerActivityFilter.value, status = trackerStatusFilter.value, type = trackerTypeFilter.value, game = trackerGameFilter.value, market = trackerMarketFilter.value, side = trackerSideFilter.value;
     return reportFilteredActivity(activity).filter(item => {
@@ -262,7 +331,13 @@
     return teams.length === 2 ? teams.join('|') : null;
   }
   function compactParlayEvaluationMarkup(parlay) {
-    if (!trackerShowEvaluations.checked || parlay.entry_origin !== 'parlay_evaluator') return '';
+    if (!trackerShowEvaluations.checked) return '';
+    const laterBaseline = (parlay.later_evaluation_baselines || []).at(-1);
+    if (laterBaseline) {
+      const probability = Number(laterBaseline.win_probability), fairOdds = Number(laterBaseline.fair_decimal), ev = Number(laterBaseline.expected_value_pct);
+      if (Number.isFinite(probability) && Number.isFinite(fairOdds) && Number.isFinite(ev)) return `<small class="compact-evaluation" style="display:block;flex:0 0 100%;width:100%"><span>Later cross-game model baseline</span> · Model ${modelPercent(probability)} · Fair ${fairOdds.toFixed(2)} · <b class="${ev >= 0 ? 'positive' : 'negative'}">${ev >= 0 ? '+' : ''}${ev.toFixed(2)}% EV</b></small>`;
+    }
+    if (parlay.entry_origin !== 'parlay_evaluator') return '';
     const gameKeys = parlay.legs.map(parlayGameKey);
     if (gameKeys.length < 2 || gameKeys.some(key => !key)) return '';
     const probability = Number(parlay.independent_model_probability);
@@ -280,9 +355,11 @@
   }
   function parlayLegModelChanceMarkup(leg) {
     if (!trackerShowEvaluations.checked) return '';
-    const probability = Number(leg.probability);
+    const snapshot = (leg.later_evaluations || []).at(-1);
+    const probability = Number(snapshot?.model?.win_probability ?? leg.probability);
     if (!Number.isFinite(probability) || probability <= 0 || probability >= 1) return '<span class="unified-parlay-leg-model unavailable">No saved model</span>';
-    return `<span class="unified-parlay-leg-model">${modelPercent(probability)} model</span>`;
+    const ev = Number(snapshot?.value?.expected_value_pct);
+    return `<span class="unified-parlay-leg-model">${modelPercent(probability)} model${Number.isFinite(ev) ? ` · <b class="${ev >= 0 ? 'positive' : 'negative'}">${ev >= 0 ? '+' : ''}${ev.toFixed(2)}% EV</b>` : ''}</span>`;
   }
   function parlayRowMarkup(parlay) {
     const settled = parlay.status !== 'pending', profit = Number(parlay.profit || 0), week = parlayWeekContext(parlay).week;
@@ -299,7 +376,8 @@
     const suggestion = latestParlayResultPreviews.find(item => item.parlay_id === parlay.id);
     const canConfirm = parlay.status === 'pending' && suggestion?.status === 'proposal' && ['won', 'lost'].includes(suggestion.proposed_result);
     const editAttribute = parlay.entry_origin === 'manual' ? `data-manual-parlay-edit="${parlay.id}"` : `data-parlay-edit="${parlay.id}"`;
-    const manualActions = `<button class="settle-win" data-parlay-settle="won" data-parlay-id="${parlay.id}">Won</button><button data-parlay-settle="lost" data-parlay-id="${parlay.id}">Lost</button><button data-parlay-payout="cashed_out" data-parlay-id="${parlay.id}">Cash out</button><details class="row-more"><summary>More</summary><div class="row-more-menu"><button ${editAttribute}>Edit</button>${window.proplensPropProtect.action(parlay, 'parlay')}<button data-parlay-payout="push_adjusted" data-parlay-id="${parlay.id}">Push-adjusted</button><button data-parlay-payout="void_adjusted" data-parlay-id="${parlay.id}">Void-adjusted</button><button data-parlay-settle="cancelled" data-parlay-id="${parlay.id}">Cancel before start</button><button data-parlay-delete="${parlay.id}" class="danger-action">Delete</button></div></details>`;
+    const laterEvaluationAction = ['manual', 'mixed'].includes(parlay.entry_origin) ? `<button data-later-evaluate-parlay="${parlay.id}">Evaluate legs with projections</button>` : '';
+    const manualActions = `<button class="settle-win" data-parlay-settle="won" data-parlay-id="${parlay.id}">Won</button><button data-parlay-settle="lost" data-parlay-id="${parlay.id}">Lost</button><button data-parlay-payout="cashed_out" data-parlay-id="${parlay.id}">Cash out</button><details class="row-more"><summary>More</summary><div class="row-more-menu"><button ${editAttribute}>Edit</button>${laterEvaluationAction}${window.proplensPropProtect.action(parlay, 'parlay')}<button data-parlay-payout="push_adjusted" data-parlay-id="${parlay.id}">Push-adjusted</button><button data-parlay-payout="void_adjusted" data-parlay-id="${parlay.id}">Void-adjusted</button><button data-parlay-settle="cancelled" data-parlay-id="${parlay.id}">Cancel before start</button><button data-parlay-delete="${parlay.id}" class="danger-action">Delete</button></div></details>`;
     const actions = canConfirm ? `<button class="settle-win confirm-result" data-confirm-parlay-preview="${parlay.id}" data-proposed-result="${suggestion.proposed_result}">Confirm ${suggestion.proposed_result[0].toUpperCase() + suggestion.proposed_result.slice(1)}</button><button data-parlay-payout="cashed_out" data-parlay-id="${parlay.id}">Cash out</button><details class="row-more"><summary>More</summary><div class="row-more-menu"><button ${editAttribute}>Edit</button>${window.proplensPropProtect.action(parlay, 'parlay')}<button data-parlay-payout="push_adjusted" data-parlay-id="${parlay.id}">Push-adjusted</button><button data-parlay-payout="void_adjusted" data-parlay-id="${parlay.id}">Void-adjusted</button><button data-parlay-settle="cancelled" data-parlay-id="${parlay.id}">Cancel before start</button><button data-parlay-delete="${parlay.id}" class="danger-action">Delete</button></div></details>` : manualActions;
     const cashoutDetail = parlay.status === 'cashed_out' ? `<small>Received ${money(parlay.settlement_amount)}</small>` : '';
     const expanded = expandedParlayIds.has(parlay.id);
@@ -309,6 +387,7 @@
   function render(data) {
     latestTrackerData = data; window.proplensTrackedBets = data.bets; window.proplensTrackedParlays = data.parlays;
     const activity = [...data.bets.map(activityForBet), ...(trackerIncludeParlays.checked ? data.parlays.map(activityForParlay) : [])];
+    pendingAnalysisActivity = reportFilteredActivity([...data.bets.map(activityForBet), ...data.parlays.map(activityForParlay)]).filter(item => item.status === 'pending' && item.status !== 'cancelled');
     populateWeekFilters(activity);
     populateGameFilter(activity);
     populateMarketFilter(activity);
@@ -496,6 +575,7 @@
   }
   const refreshVisibleTracker = () => { if (latestTrackerData) render(latestTrackerData); };
   $('#btn-open-tracker').addEventListener('click', async () => { trackerModal.hidden = false; try { await loadTracker(); } catch (error) { toast(error.message, true); } });
+  analyzePendingButton.addEventListener('click', openPendingAnalysis);
   toggleAllParlays.addEventListener('click', () => {
     const collapse = visibleParlayIds.length > 0 && visibleParlayIds.every(id => expandedParlayIds.has(id));
     visibleParlayIds.forEach(id => collapse ? expandedParlayIds.delete(id) : expandedParlayIds.add(id));
@@ -552,6 +632,13 @@
     try { if (button.dataset.confirmPreview) { const result = button.dataset.proposedResult, bet = findBet(button.dataset.confirmPreview); if (!confirmUnevaluatedPlayerPropSettlement(bet)) return; button.disabled = true; await api(`/api/tracker/bets/${button.dataset.confirmPreview}/confirm-result-preview`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ expected_result: result }) }); removeConfirmedSuggestion(button.dataset.confirmPreview); toast(`Confirmed ${result} with nflverse evidence saved.`); } else if (button.dataset.delete) { if (!window.confirm('Delete this tracked bet permanently? This cannot be undone.')) return; await api(`/api/tracker/bets/${button.dataset.delete}`, { method: 'DELETE' }); toast('Tracked bet deleted.'); } else if (button.dataset.cancel) { if (!window.confirm('Cancel this pending bet? It will remain in history with $0.00 profit.')) return; await api(`/api/tracker/bets/${button.dataset.cancel}/settle`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'cancelled' }) }); } else if (button.dataset.settle) { const bet = findBet(button.dataset.betId); if (!confirmUnevaluatedPlayerPropSettlement(bet)) return; await api(`/api/tracker/bets/${button.dataset.betId}/settle`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: button.dataset.settle }) }); } await loadTracker(); } catch (error) { toast(error.message, true); } finally { if (button.dataset.confirmPreview) button.disabled = false; }
   });
   trackerShowEvaluations.addEventListener('change', () => { if (latestTrackerData) render(latestTrackerData); });
+  $('#pending-analysis-content').addEventListener('click', event => {
+    const button = event.target.closest('[data-pending-analysis-search]'); if (!button) return;
+    trackerSearch.value = button.dataset.pendingAnalysisSearch;
+    trackerStatusFilter.value = 'pending';
+    pendingAnalysisModal.hidden = true;
+    refreshVisibleTracker();
+  });
   trackerSummary.addEventListener('click', event => { if (event.target.closest('[data-open-unlinked-credits]')) openUnlinkedPromoCredits(); });
   $('#promo-credit-list').addEventListener('click', event => {
     const button = event.target.closest('[data-open-promo-credit]'); if (!button) return;

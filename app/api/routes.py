@@ -319,6 +319,51 @@ class BatchLaterEvaluationSaveRequest(BaseModel):
             raise ValueError("Each manual bet can be selected only once.")
         return cleaned
 
+
+class ParlayLaterEvaluationLegRequest(BaseModel):
+    """One explicitly confirmed manual-parlay leg to evaluate later."""
+
+    leg_index: int
+    player_name: str
+    decimal_odds: float
+
+    @field_validator("leg_index")
+    @classmethod
+    def validate_leg_index(cls, value: int) -> int:
+        if value < 0 or value > 9:
+            raise ValueError("Choose a valid parlay leg.")
+        return value
+
+    @field_validator("player_name")
+    @classmethod
+    def validate_player_name(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Choose the matching imported player for every selected leg.")
+        return cleaned
+
+    @field_validator("decimal_odds")
+    @classmethod
+    def validate_decimal_odds(cls, value: float) -> float:
+        if value <= 1:
+            raise ValueError("Each leg needs decimal odds above 1.00.")
+        return value
+
+
+class ParlayLaterEvaluationRequest(BaseModel):
+    """Explicit leg matches and exact prices for a manual-parlay later evaluation."""
+
+    legs: list[ParlayLaterEvaluationLegRequest]
+
+    @field_validator("legs")
+    @classmethod
+    def validate_legs(cls, value: list[ParlayLaterEvaluationLegRequest]) -> list[ParlayLaterEvaluationLegRequest]:
+        if not value:
+            raise ValueError("Select at least one eligible parlay leg.")
+        if len({item.leg_index for item in value}) != len(value):
+            raise ValueError("Each parlay leg can be evaluated only once per save.")
+        return value
+
 class TrackedBetSettleRequest(BaseModel):
     status: Literal["won", "lost", "push", "cashed_out", "cancelled"]
     settlement_amount: float | None = None
@@ -965,6 +1010,9 @@ def _manual_parlay_record(payload: ManualTrackedParlayRequest) -> dict[str, Any]
         raise HTTPException(status_code=400, detail="Winning total return cannot be less than the stake.")
     manual_legs = []
     for leg in payload.legs:
+        if leg.entry_mode == "structured" and leg.market == StatCategory.ANYTIME_TD.value:
+            if str(leg.side_label or "").casefold() != "yes" or leg.line != 0.5:
+                raise HTTPException(status_code=400, detail="Anytime touchdown legs must use Yes with a 0.5 line.")
         if leg.entry_mode == "evaluated" and leg.result_identity:
             result_identity = leg.result_identity
         else:
@@ -993,7 +1041,9 @@ def _manual_parlay_record(payload: ManualTrackedParlayRequest) -> dict[str, Any]
                 "market": leg.market or "manual",
                 "side_label": leg.side_label or "",
                 "line": leg.line,
-                "decimal_odds": leg.decimal_odds if leg.entry_mode == "evaluated" else None,
+                # Guided manual legs may retain an exact price for a later model
+                # evaluation. It still does not create a model result at placement.
+                "decimal_odds": leg.decimal_odds,
                 "probability": leg.probability if leg.entry_mode == "evaluated" else None,
                 "result_identity": result_identity,
             }
@@ -1017,6 +1067,44 @@ def _manual_parlay_record(payload: ManualTrackedParlayRequest) -> dict[str, Any]
         "personal_sensitivity_probability": None,
         "season": payload.season,
         "week": payload.week,
+    }
+
+
+def _manual_parlay_leg_signature(leg: dict[str, Any]) -> tuple[Any, ...]:
+    """Identify an unchanged guided leg while preserving its later snapshots on edit."""
+    return tuple(leg.get(field) for field in ("entry_mode", "category", "player_name", "team", "opponent", "market", "side_label", "line"))
+
+
+def _later_parlay_baseline(parlay: dict[str, Any]) -> dict[str, Any] | None:
+    """Snapshot a cross-game independent baseline only when every leg is evaluated."""
+    probabilities: list[float] = []
+    game_keys: list[str] = []
+    for leg in parlay.get("legs") or []:
+        snapshots = list(leg.get("later_evaluations") or [])
+        if not snapshots:
+            return None
+        probability = snapshots[-1].get("model", {}).get("win_probability")
+        teams = sorted(str(team).strip().upper() for team in (leg.get("team"), leg.get("opponent")) if str(team or "").strip())
+        if not isinstance(probability, (int, float)) or not 0 < probability < 1 or len(teams) != 2:
+            return None
+        probabilities.append(float(probability))
+        game_keys.append("|".join(teams))
+    if len(set(game_keys)) != len(game_keys):
+        return None
+    combined_probability = 1.0
+    for probability in probabilities:
+        combined_probability *= probability
+    odds = float(parlay.get("effective_decimal_odds") or 0)
+    if odds <= 1:
+        return None
+    return {
+        "version": 1,
+        "kind": "cross_game_independent_baseline",
+        "evaluated_at": datetime.now(timezone.utc).isoformat(),
+        "win_probability": round(combined_probability, 6),
+        "fair_decimal": round(1 / combined_probability, 4),
+        "bet365_decimal": odds,
+        "expected_value_pct": round((combined_probability * odds - 1) * 100, 2),
     }
 
 
@@ -1973,6 +2061,64 @@ def create_manual_tracked_parlay(payload: ManualTrackedParlayRequest) -> dict[st
     return {"success": True, "parlay": parlay, "summary": parlay_tracker_store.summary()}
 
 
+@router.post("/tracker/parlays/{parlay_id}/later-evaluations")
+def attach_later_parlay_evaluations(parlay_id: str, payload: ParlayLaterEvaluationRequest) -> dict[str, Any]:
+    """Attach immutable model snapshots to confirmed eligible legs of a manual parlay."""
+    existing = next((item for item in parlay_tracker_store.list() if item["id"] == parlay_id), None)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Tracked parlay not found.")
+    if existing.get("entry_origin") not in {"manual", "mixed"}:
+        raise HTTPException(status_code=409, detail="Only manual parlay legs can receive a later evaluation.")
+
+    legs = [dict(leg) for leg in existing.get("legs") or []]
+    errors: list[str] = []
+    for requested in payload.legs:
+        if requested.leg_index >= len(legs):
+            errors.append("A selected parlay leg no longer exists.")
+            continue
+        leg = legs[requested.leg_index]
+        if leg.get("entry_mode") != "structured" or leg.get("category") != "player_prop":
+            errors.append(f"{leg.get('description') or 'This leg'} is not a guided player prop.")
+            continue
+        if leg.get("market") == StatCategory.ANYTIME_TD.value:
+            legacy_side = str(leg.get("side_label") or "").casefold()
+            legacy_line = leg.get("line")
+            if legacy_side not in {"yes", "over"} or legacy_line not in {None, 0.5}:
+                errors.append(f"{leg.get('description') or 'This leg'} must use Yes with a 0.5 line for Anytime TD.")
+                continue
+            # Early manual entries used Over with a blank line for the same
+            # selection. Correct the stored leg only when its later model
+            # snapshot is explicitly being saved.
+            leg["side_label"] = "Yes"
+            leg["line"] = 0.5
+        copied_bet = {
+            "entry_origin": "manual", "category": "player_prop", "market": leg.get("market"),
+            "side_label": leg.get("side_label"), "line": leg.get("line"),
+            "decimal_odds": requested.decimal_odds, "stake": 1.0, "team": leg.get("team"),
+            "opponent": leg.get("opponent"), "result_identity": leg.get("result_identity") or {},
+        }
+        try:
+            snapshot = _later_evaluation_snapshot(_evaluate_later_manual_bet(copied_bet, requested.player_name))
+        except HTTPException as exc:
+            errors.append(f"{leg.get('description') or 'This leg'}: {exc.detail}")
+            continue
+        leg["decimal_odds"] = requested.decimal_odds
+        leg["later_evaluations"] = [*list(leg.get("later_evaluations") or []), snapshot]
+    if errors:
+        raise HTTPException(status_code=409, detail="Nothing was saved. Review: " + " ".join(errors))
+
+    candidate = {**existing, "legs": legs}
+    baseline = _later_parlay_baseline(candidate)
+    changes: dict[str, Any] = {"legs": legs}
+    if baseline:
+        changes["later_evaluation_baselines"] = [*list(existing.get("later_evaluation_baselines") or []), baseline]
+    try:
+        parlay = parlay_tracker_store.update(parlay_id, changes)
+    except TrackedParlayNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Tracked parlay not found.") from exc
+    return {"success": True, "parlay": parlay, "saved_count": len(payload.legs), "baseline": baseline}
+
+
 @router.put("/tracker/parlays/{parlay_id}/manual")
 def update_manual_tracked_parlay(parlay_id: str, payload: ManualTrackedParlayRequest) -> dict[str, Any]:
     """Correct the legs and financial record of a manual parlay."""
@@ -1981,10 +2127,16 @@ def update_manual_tracked_parlay(parlay_id: str, payload: ManualTrackedParlayReq
         raise HTTPException(status_code=404, detail="Tracked parlay not found.")
     if existing.get("entry_origin") != "manual":
         raise HTTPException(status_code=409, detail="Only a manual parlay can be edited here.")
+    replacement = _manual_parlay_record(payload)
+    prior_by_signature = {_manual_parlay_leg_signature(leg): leg for leg in existing.get("legs") or []}
+    for leg in replacement["legs"]:
+        prior = prior_by_signature.get(_manual_parlay_leg_signature(leg))
+        if prior and prior.get("later_evaluations"):
+            leg["later_evaluations"] = prior["later_evaluations"]
     try:
         parlay = parlay_tracker_store.update(
             parlay_id,
-            {**_manual_parlay_record(payload), "status": payload.status, "settlement_amount": payload.settlement_amount},
+            {**replacement, "status": payload.status, "settlement_amount": payload.settlement_amount},
         )
     except TrackedParlayNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Tracked parlay not found.") from exc

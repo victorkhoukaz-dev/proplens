@@ -28,6 +28,7 @@
               <label>Market<select id="manual-leg-market"></select></label>
               <label class="manual-leg-selection-field">Side / selection<select id="manual-leg-side"><option value="Over">Over</option><option value="Under">Under</option><option value="Yes">Yes</option><option value="No">No</option><option value="Home">Home</option><option value="Away">Away</option><option value="Other">Other</option></select></label>
               <label class="manual-leg-selection-field">Line <span>optional</span><input id="manual-leg-line" class="number-input" inputmode="decimal" placeholder="e.g. 44.5 or -3.5"></label>
+              <label class="manual-leg-player-field">Decimal odds <span>optional</span><input id="manual-leg-odds" class="number-input" inputmode="decimal" min="1.01" placeholder="e.g. 1.90"><small>Saved for a later projection evaluation.</small></label>
               <label>Team <span>optional</span><input id="manual-leg-team" class="number-input" placeholder="e.g. PHI"></label>
               <label>Opponent <span>optional</span><input id="manual-leg-opponent" class="number-input" placeholder="e.g. DAL"></label>
               <label class="manual-leg-description">Description <span>optional override</span><input id="manual-leg-description" class="number-input" placeholder="Automatically generated if blank"></label>
@@ -102,6 +103,13 @@
     if (defaultMarket && [...legMarket.options].some(option => option.value === defaultMarket)) legMarket.value = defaultMarket;
   }
 
+  function syncAnytimeTouchdownLeg() {
+    const anytime = legMarket.value === 'anytime_td';
+    const side = $('#manual-leg-side'), line = $('#manual-leg-line');
+    if (anytime) { side.value = 'Yes'; line.value = '0.5'; }
+    side.disabled = anytime; line.readOnly = anytime;
+  }
+
   async function searchLegPlayers() {
     const query = value('#manual-leg-player');
     try {
@@ -144,7 +152,7 @@
 
   function renderDraftLegs() {
     $('#manual-parlay-leg-count').textContent = `${draftLegs.length} of 10 added`;
-    $('#manual-parlay-leg-list').innerHTML = draftLegs.length ? draftLegs.map((leg, index) => `<article><div><strong>${escapeHtml(leg.description)}</strong><small>${leg.entry_mode === 'structured' ? 'Guided leg' : 'Free-text leg'}${leg.team ? ` · ${escapeHtml(leg.team)}${leg.opponent ? ` vs ${escapeHtml(leg.opponent)}` : ''}` : ''}</small></div><button type="button" data-remove-manual-leg="${index}" aria-label="Remove ${escapeHtml(leg.description)}">Remove</button></article>`).join('') : '<p>No legs added yet. Add at least two before saving.</p>';
+    $('#manual-parlay-leg-list').innerHTML = draftLegs.length ? draftLegs.map((leg, index) => `<article><div><strong>${escapeHtml(leg.description)}</strong><small>${leg.entry_mode === 'structured' ? 'Guided leg' : 'Free-text leg'}${leg.team ? ` · ${escapeHtml(leg.team)}${leg.opponent ? ` vs ${escapeHtml(leg.opponent)}` : ''}` : ''}${Number.isFinite(leg.decimal_odds) ? ` · ${leg.decimal_odds.toFixed(2)} odds` : ''}</small></div><button type="button" data-remove-manual-leg="${index}" aria-label="Remove ${escapeHtml(leg.description)}">Remove</button></article>`).join('') : '<p>No legs added yet. Add at least two before saving.</p>';
   }
 
   function addGuidedLeg() {
@@ -152,8 +160,10 @@
     const category = legCategory.value;
     const description = value('#manual-leg-description') || generatedLegDescription();
     if (!description) return toast(category === 'player_prop' ? 'Choose or type a player.' : 'Enter enough details to describe this leg.', true);
-    draftLegs.push({ entry_mode: 'structured', description, category, player_name: category === 'player_prop' ? value('#manual-leg-player') || null : null, position: category === 'player_prop' ? value('#manual-leg-position') || null : null, team: value('#manual-leg-team') || null, opponent: value('#manual-leg-opponent') || null, market: legMarket.value || null, side_label: category === 'custom' ? null : value('#manual-leg-side') || null, line: category === 'custom' ? null : numberOrNull('#manual-leg-line') });
-    $('#manual-leg-description').value = ''; $('#manual-leg-line').value = ''; if (category === 'player_prop') $('#manual-leg-player').value = '';
+    const decimalOdds = numberOrNull('#manual-leg-odds');
+    if (decimalOdds !== null && (!Number.isFinite(decimalOdds) || decimalOdds <= 1)) return toast('Enter decimal odds above 1.00, or leave the field blank.', true);
+    draftLegs.push({ entry_mode: 'structured', description, category, player_name: category === 'player_prop' ? value('#manual-leg-player') || null : null, position: category === 'player_prop' ? value('#manual-leg-position') || null : null, team: value('#manual-leg-team') || null, opponent: value('#manual-leg-opponent') || null, market: legMarket.value || null, side_label: category === 'custom' ? null : value('#manual-leg-side') || null, line: category === 'custom' ? null : numberOrNull('#manual-leg-line'), decimal_odds: decimalOdds });
+    $('#manual-leg-description').value = ''; $('#manual-leg-line').value = ''; $('#manual-leg-odds').value = ''; if (category === 'player_prop') $('#manual-leg-player').value = '';
     renderDraftLegs();
   }
 
@@ -182,7 +192,7 @@
 
   function openForEdit(parlay) {
     editingId = parlay.id;
-    draftLegs = parlay.legs.map(leg => ({ entry_mode: leg.entry_mode || (leg.market === 'manual' ? 'free_text' : 'structured'), description: leg.description || leg.player_name, category: leg.category || null, player_name: leg.entry_mode === 'structured' ? leg.player_name : null, position: leg.position || leg.result_identity?.position || null, team: leg.team || null, opponent: leg.opponent || null, market: leg.market === 'manual' ? null : leg.market, side_label: leg.side_label || null, line: leg.line ?? null }));
+    draftLegs = parlay.legs.map(leg => ({ entry_mode: leg.entry_mode || (leg.market === 'manual' ? 'free_text' : 'structured'), description: leg.description || leg.player_name, category: leg.category || null, player_name: leg.entry_mode === 'structured' ? leg.player_name : null, position: leg.position || leg.result_identity?.position || null, team: leg.team || null, opponent: leg.opponent || null, market: leg.market === 'manual' ? null : leg.market, side_label: leg.side_label || null, line: leg.line ?? null, decimal_odds: leg.decimal_odds ?? null }));
     $('#manual-parlay-description').value = parlay.description || ''; $('#manual-parlay-odds').value = parlay.original_decimal_odds; $('#manual-parlay-stake').value = parlay.stake; $('#manual-parlay-type').value = parlay.bet_type; $('#manual-parlay-boost').value = parlay.profit_boost_pct || ''; $('#manual-parlay-return').value = parlay.actual_total_return ?? ''; $('#manual-parlay-season').value = parlay.season ?? ''; $('#manual-parlay-week').value = parlay.week ?? ''; status.value = parlay.status; $('#manual-parlay-settlement').value = parlay.settlement_amount ?? '';
     safetyNet.set(parlay.safety_net);
     weekHelp.textContent = parlay.week ? `Saved Week ${parlay.week}. Editing does not change it automatically.` : 'No NFL week was saved for this record.';
@@ -199,7 +209,7 @@
   });
   modal.addEventListener('click', event => { if (event.target === modal) modal.hidden = true; });
   $('#btn-add-guided-leg').addEventListener('click', addGuidedLeg); $('#btn-add-free-text-legs').addEventListener('click', addFreeTextLegs);
-  legCategory.addEventListener('change', () => renderLegMarkets()); $('#manual-leg-position').addEventListener('change', applyDefaultLegMarket);
+  legCategory.addEventListener('change', () => { renderLegMarkets(); syncAnytimeTouchdownLeg(); }); legMarket.addEventListener('change', syncAnytimeTouchdownLeg); $('#manual-leg-position').addEventListener('change', () => { applyDefaultLegMarket(); syncAnytimeTouchdownLeg(); });
   $('#manual-leg-player').addEventListener('input', () => { applyLegPlayerSuggestion(); clearTimeout(playerSearchTimer); playerSearchTimer = setTimeout(searchLegPlayers, 180); });
   ['#manual-parlay-odds', '#manual-parlay-stake', '#manual-parlay-boost', '#manual-parlay-return'].forEach(id => $(id).addEventListener('input', updateReturnPreview)); $('#manual-parlay-type').addEventListener('change', updateReturnPreview);
   status.addEventListener('change', updateSettlementVisibility); $('#manual-parlay-season').addEventListener('change', applyWeekSuggestion); $('#manual-parlay-week').addEventListener('change', rememberWeek);

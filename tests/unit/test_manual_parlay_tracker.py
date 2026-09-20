@@ -4,12 +4,18 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.db.parlay_tracker_store import parlay_tracker_store
+from app.db.cache import cache
+from app.db.loaded_data_store import loaded_data_store
+from app.db.projection_snapshot_store import projection_snapshot_store
 from app.main import app
 
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(parlay_tracker_store, "path", tmp_path / "tracked_parlays.json")
+    monkeypatch.setattr(projection_snapshot_store, "path", tmp_path / "projection_snapshots.json")
+    monkeypatch.setattr(loaded_data_store, "path", tmp_path / "loaded_data.json")
+    cache.replace_projections([])
     return TestClient(app)
 
 
@@ -156,3 +162,78 @@ def test_manual_parlay_requires_two_legs_and_complete_week_context(client):
     assert one_leg.status_code == 422
     assert partial_week.status_code == 400
     assert "both season and NFL week" in partial_week.json()["detail"]
+
+
+def test_manual_cross_game_parlay_can_receive_later_leg_snapshots_including_anytime_td(client):
+    imported = client.post(
+        "/api/upload/paste",
+        json={
+            "data_type": "projections",
+            "content": "Player,Team,Pos,Opp,Rush Yds,TD\nSaquon Barkley,PHI,RB,DAL,70.5,0.65\nJustin Jefferson,MIN,WR,GB,,0.45\n",
+            "season": 2026,
+            "week": 1,
+            "label": "Cross-game projection set",
+        },
+    )
+    assert imported.status_code == 200
+    parlay = client.post(
+        "/api/tracker/parlays/manual",
+        json=payload(
+            legs=[
+                {"entry_mode": "structured", "description": "Saquon Barkley Over 70", "category": "player_prop", "player_name": "Saquon Barkley", "position": "RB", "team": "PHI", "opponent": "DAL", "market": "rushing_yards", "side_label": "Over", "line": 70},
+                {"entry_mode": "structured", "description": "Justin Jefferson Yes Anytime TD", "category": "player_prop", "player_name": "Justin Jefferson", "position": "WR", "team": "MIN", "opponent": "GB", "market": "anytime_td", "side_label": "Yes", "line": 0.5},
+            ],
+            decimal_odds=5.0,
+        ),
+    ).json()["parlay"]
+
+    saved = client.post(
+        f"/api/tracker/parlays/{parlay['id']}/later-evaluations",
+        json={"legs": [
+            {"leg_index": 0, "player_name": "Saquon Barkley", "decimal_odds": 1.9},
+            {"leg_index": 1, "player_name": "Justin Jefferson", "decimal_odds": 3.0},
+        ]},
+    )
+
+    assert saved.status_code == 200
+    updated = saved.json()["parlay"]
+    assert updated["entry_origin"] == "manual"
+    assert all(len(leg["later_evaluations"]) == 1 for leg in updated["legs"])
+    assert updated["legs"][1]["later_evaluations"][0]["prop"]["side_label"] == "Yes"
+    assert updated["legs"][1]["later_evaluations"][0]["prop"]["line"] == 0.5
+    assert updated["later_evaluation_baselines"][-1]["kind"] == "cross_game_independent_baseline"
+
+
+def test_manual_parlay_rejects_an_invalid_anytime_td_selection(client):
+    response = client.post(
+        "/api/tracker/parlays/manual",
+        json=payload(legs=[
+            {"entry_mode": "structured", "description": "Saquon Barkley Over 70", "category": "player_prop", "player_name": "Saquon Barkley", "market": "rushing_yards", "side_label": "Over", "line": 70},
+            {"entry_mode": "structured", "description": "Justin Jefferson Over Anytime TD", "category": "player_prop", "player_name": "Justin Jefferson", "market": "anytime_td", "side_label": "Over", "line": 0.5},
+        ]),
+    )
+    assert response.status_code == 400
+    assert "Yes with a 0.5 line" in response.json()["detail"]
+
+
+def test_later_parlay_evaluation_corrects_a_legacy_anytime_td_over_entry(client):
+    client.post(
+        "/api/upload/paste",
+        json={"data_type": "projections", "content": "Player,Team,Pos,Opp,TD\nJustin Jefferson,MIN,WR,GB,0.45\n", "season": 2026, "week": 1},
+    )
+    parlay = client.post(
+        "/api/tracker/parlays/manual",
+        json=payload(legs=[
+            {"entry_mode": "structured", "description": "Justin Jefferson Over Anytime TD", "category": "player_prop", "player_name": "Justin Jefferson", "team": "MIN", "opponent": "GB", "market": "anytime_td", "side_label": "Yes", "line": 0.5},
+            {"entry_mode": "free_text", "description": "Legacy second leg"},
+        ]),
+    ).json()["parlay"]
+    # This fixture mirrors saved pre-feature data; it predates the new creation validation.
+    legacy_legs = [dict(leg) for leg in parlay["legs"]]
+    legacy_legs[0].update({"side_label": "Over", "line": None})
+    parlay_tracker_store.update(parlay["id"], {"legs": legacy_legs})
+    saved = client.post(f"/api/tracker/parlays/{parlay['id']}/later-evaluations", json={"legs": [{"leg_index": 0, "player_name": "Justin Jefferson", "decimal_odds": 3.0}]})
+    assert saved.status_code == 200
+    leg = saved.json()["parlay"]["legs"][0]
+    assert leg["side_label"] == "Yes"
+    assert leg["line"] == 0.5
