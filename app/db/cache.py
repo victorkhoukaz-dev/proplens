@@ -24,6 +24,7 @@ class AppSettings:
         w_model: float = 0.40,
         min_ev_threshold: float = 0.0,
         min_stake: float = 5.0,
+        default_stake: float = 5.0,
         odds_api_key: str = "",
         api_provider: str = "oddspapi",
         auto_refresh_seconds: int = 60,
@@ -34,6 +35,7 @@ class AppSettings:
         self.w_model = w_model
         self.min_ev_threshold = min_ev_threshold
         self.min_stake = min_stake
+        self.default_stake = default_stake
         self.odds_api_key = odds_api_key
         self.api_provider = api_provider  # "oddspapi" or "the_odds_api"
         self.auto_refresh_seconds = auto_refresh_seconds
@@ -46,6 +48,7 @@ class AppSettings:
             "w_model": self.w_model,
             "min_ev_threshold": self.min_ev_threshold,
             "min_stake": self.min_stake,
+            "default_stake": self.default_stake,
             "api_provider": self.api_provider,
             "has_odds_api_key": bool(self.odds_api_key.strip()),
             "odds_api_key_masked": (
@@ -65,6 +68,7 @@ class AppSettings:
             "w_model": self.w_model,
             "min_ev_threshold": self.min_ev_threshold,
             "min_stake": self.min_stake,
+            "default_stake": self.default_stake,
             "odds_api_key": self.odds_api_key,
             "api_provider": self.api_provider,
             "auto_refresh_seconds": self.auto_refresh_seconds,

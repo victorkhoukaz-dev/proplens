@@ -57,9 +57,34 @@ class ProjectionSnapshotStore:
     def __init__(self, path: Path = DEFAULT_SNAPSHOT_PATH) -> None:
         self.path = path
         self._lock = threading.RLock()
+        # Projection history can be sizeable, but normal evaluator actions only
+        # need its tiny snapshot summary. Keep one parsed copy per unchanged file
+        # so typing a player name never reparses every old weekly import.
+        self._cached_signature: tuple[str, int | None, int | None] | None = None
+        self._cached_active_id: str | None = None
+        self._cached_snapshots: list[ProjectionSnapshot] = []
+        self._cached_summaries: list[dict[str, object]] = []
+
+    def _file_signature(self) -> tuple[str, int | None, int | None]:
+        try:
+            stat = self.path.stat()
+            return (str(self.path.resolve()), stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            return (str(self.path.resolve()), None, None)
+
+    def _refresh_cache(self, active_id: str | None, snapshots: list[ProjectionSnapshot]) -> None:
+        self._cached_signature = self._file_signature()
+        self._cached_active_id = active_id
+        self._cached_snapshots = snapshots
+        ordered = sorted(snapshots, key=lambda item: item.imported_at, reverse=True)
+        self._cached_summaries = [item.summary(active_id) for item in ordered]
 
     def _read(self) -> tuple[str | None, list[ProjectionSnapshot]]:
+        signature = self._file_signature()
+        if self._cached_signature == signature:
+            return self._cached_active_id, self._cached_snapshots
         if not self.path.exists():
+            self._refresh_cache(None, [])
             return None, []
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
@@ -78,8 +103,11 @@ class ProjectionSnapshotStore:
                         projections=[PlayerProjection.model_validate(p) for p in item["projections"]],
                     )
                 )
-            return raw.get("active_id"), snapshots
+            active_id = raw.get("active_id")
+            self._refresh_cache(active_id, snapshots)
+            return active_id, snapshots
         except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError, ValidationError):
+            self._refresh_cache(None, [])
             return None, []
 
     def _write(self, active_id: str | None, snapshots: list[ProjectionSnapshot]) -> None:
@@ -104,12 +132,13 @@ class ProjectionSnapshotStore:
         temporary_path = self.path.with_suffix(".tmp")
         temporary_path.write_text(serialized, encoding="utf-8")
         temporary_path.replace(self.path)
+        self._refresh_cache(active_id, snapshots)
 
     def list_summaries(self) -> dict[str, object]:
         with self._lock:
-            active_id, snapshots = self._read()
-            ordered = sorted(snapshots, key=lambda item: item.imported_at, reverse=True)
-            return {"active_id": active_id, "snapshots": [item.summary(active_id) for item in ordered]}
+            active_id, _ = self._read()
+            # Return fresh dictionaries so callers cannot mutate cached metadata.
+            return {"active_id": active_id, "snapshots": [dict(item) for item in self._cached_summaries]}
 
     def list(self) -> list[ProjectionSnapshot]:
         """Return immutable saved imports in chronological order for research use."""

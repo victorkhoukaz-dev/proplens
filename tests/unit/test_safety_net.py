@@ -1,4 +1,4 @@
-"""Safety-net economics, actual cash accounting, and explicit receipt/link lifecycle."""
+"""Safety-net economics, actual cash accounting, and receipt lifecycle."""
 import math
 
 import pytest
@@ -30,10 +30,6 @@ def create(client, **changes):
 
 def receipt(client, source, amount=5):
     return client.post(f"/api/tracker/safety-nets/{source['id']}/receipt", json={"amount": amount})
-
-
-def link(client, source, target, kind="parlay", **changes):
-    return client.post(f"/api/tracker/safety-nets/{source['id']}/link", json={"kind": kind, "ticket_id": target["id"], **changes})
 
 
 def summary(client):
@@ -70,7 +66,6 @@ def test_cash_profit_never_uses_conversion(client, bonus_status, profit, roi, ki
         bonus = create(client, bet_type="bonus", safety_net=None, decimal_odds=3)
     else:
         bonus = bet_tracker_store.create({"player_name": "Bonus player", "stake": 5, "decimal_odds": 3, "bet_type": "bonus"})
-    assert link(client, source, bonus, kind).status_code == 200
     assert summary(client)["total_profit"] == -5
     store = parlay_tracker_store if kind == "parlay" else bet_tracker_store
     store.settle(bonus["id"], bonus_status)
@@ -80,8 +75,7 @@ def test_cash_profit_never_uses_conversion(client, bonus_status, profit, roi, ki
     assert totals["bonus_value_used"] == 5
     assert totals["total_roi_on_cash_risk_pct"] == roi
     report = client.get("/api/tracker/safety-nets").json()["sources"][0]
-    assert report["remaining"] == 0
-    assert report["links"][0]["cash_profit"] == (10 if bonus_status == "won" else 0)
+    assert report["receipt"]["amount"] == 5
     # Reload from disk, not a transient UI value.
     assert parlay_tracker_store.list()[-1]["safety_net_receipt"]["amount"] == 5
 
@@ -111,40 +105,25 @@ def test_offer_validation(client, changes):
     assert parlay_tracker_store.list() == []
 
 
-def test_link_validation_corrections_and_retry(client):
+def test_receipt_corrections_do_not_depend_on_bonus_wager_links(client):
     source = create(client, status="lost")
-    other = create(client, status="lost")
-    bonus = create(client, bet_type="bonus", safety_net=None)
-    assert link(client, source, bonus).status_code == 400
     assert receipt(client, source, 6).status_code == 400
     assert receipt(client, source).status_code == 200
-    assert receipt(client, other).status_code == 200
-    assert link(client, source, source).status_code == 400
-    assert link(client, source, bonus).status_code == 200
-    assert link(client, source, bonus).status_code == 200
-    assert len(parlay_tracker_store.list()[-1]["safety_net_links"]) == 1
-    assert link(client, other, bonus).status_code == 400
-    assert receipt(client, source, None).status_code == 400
-    assert receipt(client, source, 4).status_code == 400
-    assert client.delete(f"/api/tracker/parlays/{source['id']}").status_code == 400
+    assert receipt(client, source, 4).status_code == 200
+    assert receipt(client, source, 5.01).status_code == 400
     assert client.post(f"/api/tracker/parlays/{source['id']}/settle", json={"status": "won"}).status_code == 400
     assert client.put(f"/api/tracker/parlays/{source['id']}/manual", json=manual(status="lost", safety_net=None)).status_code == 400
-    assert link(client, source, bonus, unlink=True).status_code == 200
     assert receipt(client, source, None).status_code == 200
     assert client.post(f"/api/tracker/parlays/{source['id']}/settle", json={"status": "won"}).status_code == 200
 
 
-def test_changed_bonus_requires_review_and_overallocation_rejected(client):
+def test_receipt_overview_has_no_bonus_wager_linkage(client):
     source = create(client, status="lost")
     receipt(client, source)
-    bonus = create(client, bet_type="bonus", safety_net=None, stake=3)
-    another = create(client, bet_type="bonus", safety_net=None, stake=3)
-    assert link(client, source, bonus).status_code == 200
-    assert link(client, source, another).status_code == 400
-    parlay_tracker_store.update(bonus["id"], {"stake": 4})
     report = client.get("/api/tracker/safety-nets").json()["sources"][0]
-    assert report["links"][0]["needs_review"] is True
-    assert report["links"][0]["cash_profit"] is None
+    assert report["receipt"]["amount"] == 5
+    assert "links" not in report
+    assert "remaining" not in report
 
 
 def test_old_client_edit_preserves_offer_and_receipt(client):

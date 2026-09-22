@@ -125,8 +125,6 @@ class ParlayTrackerStore:
     def delete(self, parlay_id: str) -> None:
         with self._lock:
             parlays = self._read()
-            if any(p["id"] == parlay_id and p.get("safety_net_links") for p in parlays):
-                raise ValueError("Unlink the resulting bonus wagers before deleting this safety-net parlay.")
             remaining = [parlay for parlay in parlays if parlay["id"] != parlay_id]
             if len(remaining) == len(parlays):
                 raise TrackedParlayNotFoundError(parlay_id)

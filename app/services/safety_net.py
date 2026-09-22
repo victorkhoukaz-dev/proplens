@@ -1,11 +1,10 @@
-"""Promotion estimates and links. No changes to profit or ROI definitions."""
+"""Safety-net promotion estimates and confirmed bonus-credit receipts."""
 from __future__ import annotations
 
 import math
 from datetime import datetime, timezone
 from typing import Any
 
-from app.db.bet_tracker_store import bet_tracker_store
 from app.db.parlay_tracker_store import parlay_tracker_store
 
 
@@ -66,38 +65,19 @@ def parlay_week_context(source: dict[str, Any]) -> tuple[int | None, int | None]
 
 
 def overview() -> dict[str, Any]:
-    """Read current linked wagers so later edits never silently misstate recovery."""
+    """Return safety-net sources and their confirmed bonus-credit receipts."""
     parlays = parlay_tracker_store.list()
-    bets = bet_tracker_store.list()
-    destinations = {("straight", b["id"]): b for b in bets}
-    destinations.update({("parlay", p["id"]): p for p in parlays})
     sources = []
-    linked_keys = set()
     for source in parlays:
         if not source.get("safety_net"):
             continue
-        links = []
-        for link in source.get("safety_net_links", []):
-            key = (link["kind"], link["ticket_id"])
-            linked_keys.add(key)
-            ticket = destinations.get(key)
-            valid = bool(ticket and ticket["bet_type"] == "bonus" and ticket["status"] != "cancelled" and abs(float(ticket["stake"]) - link["amount"]) < .005)
-            links.append({**link, "needs_review": not valid, "description": ticket_title(ticket) if ticket else "Missing wager",
-                          "status": ticket.get("status") if ticket else None,
-                          "cash_profit": ticket.get("profit") if valid else None})
         receipt = source.get("safety_net_receipt")
-        allocated = round(sum(link["amount"] for link in links), 2)
         season, week = parlay_week_context(source)
         sources.append({"id": source["id"], "description": ticket_title(source), "created_at": source["created_at"],
                         "season": season, "week": week,
                         "status": source["status"], "offer": source["safety_net"], "receipt": receipt,
-                        "remaining": round(receipt["amount"] - allocated, 2) if receipt else 0,
-                        "links": links})
-    candidates = [{"kind": kind, "ticket_id": id_, "description": ticket_title(ticket), "stake": ticket["stake"],
-                   "status": ticket["status"], "created_at": ticket["created_at"]}
-                  for (kind, id_), ticket in destinations.items()
-                  if ticket["bet_type"] == "bonus" and ticket["status"] != "cancelled" and (kind, id_) not in linked_keys]
-    return {"sources": sources, "candidates": candidates}
+                        })
+    return {"sources": sources}
 
 
 def ticket_title(ticket):
@@ -111,37 +91,8 @@ def record_receipt(source_id: str, amount: float | None):
             raise ValueError("Safety-net parlay not found.")
         if not source.get("safety_net") or source["status"] != "lost" or source["bet_type"] != "cash":
             raise ValueError("Only a lost cash safety-net parlay can receive a bonus refund.")
-        allocated = sum(link["amount"] for link in source.get("safety_net_links", []))
-        if amount is None and allocated:
-            raise ValueError("Unlink bonus wagers before clearing the receipt.")
-        if amount is not None and (not math.isfinite(amount) or amount <= 0 or amount > source["safety_net"]["refund_amount"] or amount < allocated):
-            raise ValueError("Received amount must cover linked wagers and cannot exceed the expected refund.")
+        if amount is not None and (not math.isfinite(amount) or amount <= 0 or amount > source["safety_net"]["refund_amount"]):
+            raise ValueError("Received amount must be positive and cannot exceed the expected refund.")
         receipt = {"amount": round(amount, 2), "confirmed_at": datetime.now(timezone.utc).isoformat()} if amount is not None else None
         history = [*source.get("safety_net_history", []), {"action": "receipt", "at": datetime.now(timezone.utc).isoformat(), "receipt": receipt}]
         return parlay_tracker_store.update(source_id, {"safety_net_receipt": receipt, "safety_net_history": history})
-
-
-def link_bonus(source_id: str, kind: str, ticket_id: str, unlink: bool = False):
-    # Both local stores are locked in a fixed order for allocation checks and writes.
-    with bet_tracker_store._lock, parlay_tracker_store._lock:
-        report = overview()
-        source = next((s for s in report["sources"] if s["id"] == source_id), None)
-        if source is None:
-            raise ValueError("Safety-net parlay not found.")
-        record = next(p for p in parlay_tracker_store.list() if p["id"] == source_id)
-        links = list(record.get("safety_net_links", []))
-        if unlink:
-            links = [link for link in links if (link["kind"], link["ticket_id"]) != (kind, ticket_id)]
-        else:
-            if not source["receipt"] or source["status"] != "lost":
-                raise ValueError("Confirm the bonus refund was received before linking a bonus wager.")
-            if any((link["kind"], link["ticket_id"]) == (kind, ticket_id) for link in links):
-                return record  # An identical retry is harmless.
-            candidate = next((c for c in report["candidates"] if (c["kind"], c["ticket_id"]) == (kind, ticket_id)), None)
-            if not candidate:
-                raise ValueError("Choose an unlinked bonus wager that has not been cancelled.")
-            if candidate["stake"] > source["remaining"] + .001:
-                raise ValueError("This wager uses more bonus credit than remains in this refund. Mixed funding is not supported.")
-            links.append({"kind": kind, "ticket_id": ticket_id, "amount": candidate["stake"], "linked_at": datetime.now(timezone.utc).isoformat()})
-        history = [*record.get("safety_net_history", []), {"action": "unlink" if unlink else "link", "kind": kind, "ticket_id": ticket_id, "at": datetime.now(timezone.utc).isoformat()}]
-        return parlay_tracker_store.update(source_id, {"safety_net_links": links, "safety_net_history": history})

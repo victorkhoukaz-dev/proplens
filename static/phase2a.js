@@ -28,19 +28,17 @@
     return select;
   })();
   let selectedBet = null, selectedLaterEvaluationBet = null, laterEvaluationPlayers = [], latestTrackerData = null, latestOverallSummary = null, latestResultPreview = null, latestParlayResultPreviews = [], latestBatchEvaluationPreview = null, showingSuggestionsOnly = false, visibleParlayIds = [], pendingAnalysisActivity = [];
-  const promoCreditModal = (() => {
-    document.body.insertAdjacentHTML('beforeend', '<div class="modal-backdrop" id="promo-credit-modal" hidden><section class="modal-card safety-net-card" role="dialog" aria-modal="true" aria-labelledby="promo-credit-title"><button type="button" class="modal-close" id="promo-credit-close" aria-label="Close">×</button><h2 id="promo-credit-title">Promo credits to link</h2><p class="field-help">Choose a Safety Net or Prop Protect credit to open its linking workflow.</p><div id="promo-credit-list" class="promo-credit-list"></div></section></div>');
-    const modal = $('#promo-credit-modal');
-    $('#promo-credit-close').onclick = () => { modal.hidden = true; };
-    modal.addEventListener('click', event => { if (event.target === modal) modal.hidden = true; });
-    return modal;
-  })();
+  trackerStatusFilter.value = 'pending';
   const pendingAnalysisModal = (() => {
     document.body.insertAdjacentHTML('beforeend', '<div class="modal-backdrop" id="pending-analysis-modal" hidden><section class="modal-card pending-analysis-card" role="dialog" aria-modal="true" aria-labelledby="pending-analysis-title"><button type="button" class="modal-close" id="pending-analysis-close" aria-label="Close">×</button><p class="eyebrow">LIVE TICKET REVIEW</p><h2 id="pending-analysis-title">Pending-bet overview</h2><p id="pending-analysis-context" class="field-help"></p><div id="pending-analysis-content"></div></section></div>');
     const modal = $('#pending-analysis-modal');
     $('#pending-analysis-close').onclick = () => { modal.hidden = true; };
     modal.addEventListener('click', event => { if (event.target === modal) modal.hidden = true; });
     return modal;
+  })();
+  const manualBonusCreditModal = (() => {
+    document.body.insertAdjacentHTML('beforeend', '<div class="modal-backdrop" id="manual-bonus-credit-modal" hidden><section class="modal-card compact" role="dialog" aria-modal="true"><button type="button" class="modal-close" id="manual-bonus-credit-close">×</button><p class="eyebrow">BONUS CREDIT</p><h2>Add bonus bets received</h2><p class="field-help">Use this for sportsbook credits unrelated to Safety Net or Prop Protect. It records received bonus value, never cash profit.</p><label>Amount ($)<input id="manual-bonus-credit-amount" class="number-input" type="number" min="0.01" step="0.01"></label><label>Season <span>optional</span><input id="manual-bonus-credit-season" class="number-input" type="number" min="2020" max="2100"></label><label>NFL week <span>optional</span><input id="manual-bonus-credit-week" class="number-input" type="number" min="1" max="25"></label><p id="manual-bonus-credit-context" class="field-help"></p><button type="button" class="secondary-button" id="btn-save-manual-bonus-credit">Record bonus credit</button></section></div>');
+    const modal = $('#manual-bonus-credit-modal'); $('#manual-bonus-credit-close').onclick = () => modal.hidden = true; modal.addEventListener('click', event => { if (event.target === modal) modal.hidden = true; }); return modal;
   })();
   const expandedParlayIds = new Set();
   const toggleAllParlays = (() => {
@@ -167,26 +165,7 @@
   }
   function bonusCreditSummary(sources) {
     const scopedSources = scopedBonusCreditSources(sources);
-    return {
-      received: scopedSources.reduce((total, source) => total + Number(source.receipt.amount || 0), 0),
-      unlinked: scopedSources.reduce((total, source) => total + Number(source.remaining || 0), 0),
-    };
-  }
-  function unlinkedPromoSources() {
-    if (!latestTrackerData) return [];
-    const sources = [
-      ...(latestTrackerData.safety_net_sources || []).map(source => ({...source, promo_type: 'safety_net'})),
-      ...(latestTrackerData.prop_protect_sources || []).map(source => ({...source, promo_type: 'prop_protect'})),
-    ];
-    return scopedBonusCreditSources(sources).filter(source => Number(source.remaining || 0) > .001);
-  }
-  function openUnlinkedPromoCredits() {
-    const sources = unlinkedPromoSources();
-    $('#promo-credit-list').innerHTML = sources.length ? sources.map(source => {
-      const type = source.promo_type === 'safety_net' ? 'Safety Net' : 'Prop Protect';
-      return `<button type="button" data-open-promo-credit="${source.promo_type}" data-promo-credit-kind="${escapeHtml(source.kind || '')}" data-promo-credit-id="${escapeHtml(source.id)}"><strong>${type}</strong><span>${escapeHtml(source.description)} · ${money(source.remaining)} unlinked</span></button>`;
-    }).join('') : '<p class="field-help">No confirmed promo credits are waiting to be linked in this view.</p>';
-    promoCreditModal.hidden = false;
+    return { received: scopedSources.reduce((total, source) => total + Number(source.receipt.amount || 0), 0) };
   }
   function summarizeActivity(activity) {
     const settled = activity.filter(item => item.status !== 'pending');
@@ -269,15 +248,28 @@
     }).sort((a, b) => {
       if (trackerSort.value === 'pending_first' && (a.status === 'pending') !== (b.status === 'pending')) return a.status === 'pending' ? -1 : 1;
       if (trackerSort.value === 'player') return a.activity_sort_name.localeCompare(b.activity_sort_name);
+      if (trackerSort.value === 'ev_desc' || trackerSort.value === 'ev_asc') {
+        const ev = item => {
+          const latestSnapshot = item.evaluation_refreshes?.at(-1) || item.later_evaluations?.at(-1);
+          return item.activity_type === 'straight'
+            ? Number(item.expected_value_pct ?? latestSnapshot?.value?.expected_value_pct)
+            : Number(item.later_evaluation_baselines?.at(-1)?.expected_value_pct);
+        };
+        const left = ev(a), right = ev(b), direction = trackerSort.value === 'ev_desc' ? -1 : 1;
+        if (!Number.isFinite(left)) return 1;
+        if (!Number.isFinite(right)) return -1;
+        return direction * (left - right);
+      }
       return (trackerSort.value === 'oldest' ? 1 : -1) * String(a.created_at).localeCompare(String(b.created_at));
     });
   }
   function resultSuggestionFor(bet) { return latestResultPreview?.proposals.find(item => item.bet_id === bet.id); }
   function needsUnevaluatedPlayerPropWarning(bet) {
-    return bet?.entry_origin === 'manual' && bet.category === 'player_prop' && !(bet.later_evaluations || []).length;
+    const hasSavedSnapshot = (bet?.later_evaluations || []).length || (bet?.evaluation_refreshes || []).length;
+    return bet?.entry_origin === 'manual' && bet.category === 'player_prop' && !hasSavedSnapshot;
   }
   function confirmUnevaluatedPlayerPropSettlement(bet) {
-    return !needsUnevaluatedPlayerPropWarning(bet) || window.confirm('This player prop has no saved evaluation. It will settle normally, but cannot be included in future model-calibration analysis. Settle it anyway?');
+    return !needsUnevaluatedPlayerPropWarning(bet) || window.confirm('This player prop has no saved model snapshot. It will settle normally. Settle it anyway?');
   }
   function inlineSuggestionMarkup(bet) {
     const suggestion = resultSuggestionFor(bet);
@@ -397,12 +389,12 @@
     const visibleActivity = filteredActivity(activity);
     const nonPerformanceStatus = ['pending', 'won', 'lost', 'cashed_out'].includes(trackerStatusFilter.value);
     const s = summarizeActivity(visibleActivity);
-    const bonusCredits = bonusCreditSummary([...(data.safety_net_sources || []), ...(data.prop_protect_sources || [])]);
+    const bonusCredits = bonusCreditSummary([...(data.safety_net_sources || []), ...(data.prop_protect_sources || []), ...(data.manual_bonus_credit_sources || [])]);
     latestOverallSummary = s;
     const performance = value => nonPerformanceStatus ? '—' : value;
     const profit = value => `<strong class="${nonPerformanceStatus ? '' : value >= 0 ? 'positive' : 'negative'}">${nonPerformanceStatus ? '—' : `${value >= 0 ? '+' : ''}${money(value)}`}</strong>`;
     const pendingCashLabel = s.pending_cash_count === 1 ? '1 pending cash bet' : `${s.pending_cash_count} pending cash bets`;
-    trackerSummary.innerHTML = `<div title="Cash staked on pending cash bets in the current filtered view. Bonus bets do not put cash at risk."><span>Pending cash at risk</span><strong>${money(s.pending_cash_at_risk)}<small style="margin-left:4px;color:var(--muted);font:500 9px var(--mono)">${pendingCashLabel}</small></strong></div><div><span>Cash-bet P/L</span>${profit(s.cash_profit)}</div><div><span>Bonus-bet cash profit</span>${profit(s.bonus_profit)}</div><div><span>Total net profit</span>${profit(s.total_profit)}</div><div title="Confirmed Safety Net and Prop Protect credits. This is promo face value, not cash profit and not part of ROI. Receipt amounts follow season/week because a credit is not tied to a market or game until it is linked."><span>Bonus bets received</span><strong class="positive">${money(bonusCredits.received)}</strong><button type="button" class="bonus-credit-balance" data-open-unlinked-credits>Unlinked: ${money(bonusCredits.unlinked)}</button></div><div><span>Cash-bet ROI</span><strong>${performance(percent(s.cash_roi_pct))}</strong></div><div><span>Total ROI on cash risk</span><strong>${performance(percent(s.total_roi_on_cash_risk_pct))}</strong></div><div><span>Cash wagered in view</span><strong>${money(s.cash_wagered)}</strong></div><div title="All tracked bonus-bet stakes matching the current filtered view, whether or not they have been linked to a promotion credit."><span>Bonus value wagered</span><strong>${money(s.bonus_value_used ?? s.bonus_stake_used)}</strong></div>`;
+    trackerSummary.innerHTML = `<div title="Cash staked on pending cash bets in the current filtered view. Bonus bets do not put cash at risk."><span>Pending cash at risk</span><strong>${money(s.pending_cash_at_risk)}<small style="margin-left:4px;color:var(--muted);font:500 9px var(--mono)">${pendingCashLabel}</small></strong></div><div><span>Cash-bet P/L</span>${profit(s.cash_profit)}</div><div><span>Bonus-bet cash profit</span>${profit(s.bonus_profit)}</div><div><span>Total net profit</span>${profit(s.total_profit)}</div><div title="Confirmed promo credits. This is promo face value, not cash profit and not part of ROI."><span>Bonus bets received</span><strong class="positive">${money(bonusCredits.received)}</strong><button type="button" class="bonus-credit-balance" data-add-manual-bonus-credit>Add manually</button></div><div><span>Cash-bet ROI</span><strong>${performance(percent(s.cash_roi_pct))}</strong></div><div><span>Total ROI on cash risk</span><strong>${performance(percent(s.total_roi_on_cash_risk_pct))}</strong></div><div><span>Cash wagered in view</span><strong>${money(s.cash_wagered)}</strong></div><div title="All tracked bonus-bet stakes matching the current filtered view."><span>Bonus value wagered</span><strong>${money(s.bonus_value_used ?? s.bonus_stake_used)}</strong></div>`;
     trackerReportContext.textContent = filteredContextLabel();
     $('#tracker-activity-column-label').textContent = trackerIncludeParlays.checked ? 'Activity' : 'Bet';
     trackerVisibleCount.textContent = `Showing ${visibleActivity.length} of ${reportActivity.length}`;
@@ -478,11 +470,12 @@
   }
   async function loadTracker() {
     const pending = trackerIncludePending.checked, parlays = trackerIncludeParlays.checked;
-    const [trackerData, parlayData, safetyNetData, propProtectData] = await Promise.all([
+    const [trackerData, parlayData, safetyNetData, propProtectData, manualCreditData] = await Promise.all([
       api(`/api/tracker/bets?include_pending=${pending}`),
       parlays ? api(`/api/tracker/parlays?include_pending=${pending}`) : Promise.resolve({ parlays: [] }),
       parlays ? api('/api/tracker/safety-nets') : Promise.resolve({ sources: [] }),
       api('/api/tracker/prop-protect'),
+      api('/api/tracker/manual-bonus-credits'),
     ]);
     const safetyNetByParlayId = new Map((safetyNetData.sources || []).map(source => [source.id, source]));
     const enrichedParlays = (parlayData.parlays || []).map(parlay => ({
@@ -491,7 +484,7 @@
       prop_protect_summary: (propProtectData.sources || []).find(source => source.kind === 'parlay' && source.id === parlay.id) || null,
     }));
     const propProtectByBetId = new Map((propProtectData.sources || []).filter(source => source.kind === 'straight').map(source => [source.id, source]));
-    render({ ...trackerData, bets: (trackerData.bets || []).map(bet => ({...bet, prop_protect_summary: propProtectByBetId.get(bet.id) || null})), parlays: enrichedParlays, safety_net_sources: safetyNetData.sources || [], prop_protect_sources: propProtectData.sources || [] });
+    render({ ...trackerData, bets: (trackerData.bets || []).map(bet => ({...bet, prop_protect_summary: propProtectByBetId.get(bet.id) || null})), parlays: enrichedParlays, safety_net_sources: safetyNetData.sources || [], prop_protect_sources: propProtectData.sources || [], manual_bonus_credit_sources: manualCreditData.sources || [] });
   }
   window.proplensRefreshTracker = loadTracker;
   const findBet = id => (window.proplensTrackedBets || []).find(bet => bet.id === id);
@@ -593,6 +586,19 @@
   toggleResultPreview.addEventListener('click', () => { const collapsed = resultPreview.classList.toggle('is-collapsed'); toggleResultPreview.textContent = collapsed ? 'Expand' : 'Collapse'; toggleResultPreview.setAttribute('aria-expanded', String(!collapsed)); });
   suggestionsOnly.addEventListener('click', () => { showingSuggestionsOnly = !showingSuggestionsOnly; suggestionsOnly.classList.toggle('active', showingSuggestionsOnly); suggestionsOnly.textContent = showingSuggestionsOnly ? 'Show all bets' : `Suggestions only (${latestResultPreview?.proposals.filter(item => item.status === 'proposal').length || 0})`; refreshVisibleTracker(); });
   trackerIncludePending.addEventListener('change', () => loadTracker().catch(error => toast(error.message, true)));
+  trackerSummary.addEventListener('click', event => {
+    if (!event.target.closest('[data-add-manual-bonus-credit]')) return;
+    const season = Number(trackerSeasonFilter.value), week = Number(trackerWeekFilter.value);
+    $('#manual-bonus-credit-amount').value = ''; $('#manual-bonus-credit-season').value = Number.isInteger(season) ? season : ''; $('#manual-bonus-credit-week').value = Number.isInteger(week) ? week : '';
+    $('#manual-bonus-credit-context').textContent = 'Leave both season and week blank to keep it unassigned. Enter both to include it in that NFL week.';
+    manualBonusCreditModal.hidden = false;
+  });
+  $('#btn-save-manual-bonus-credit').addEventListener('click', async event => {
+    const amount = Number($('#manual-bonus-credit-amount').value), season = Number($('#manual-bonus-credit-season').value), week = Number($('#manual-bonus-credit-week').value);
+    if (!Number.isFinite(amount) || amount <= 0) return toast('Enter a positive bonus-credit amount.', true);
+    const button = event.currentTarget; button.disabled = true;
+    try { await api('/api/tracker/manual-bonus-credits', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({amount, season: Number.isInteger(season) ? season : null, week: Number.isInteger(week) ? week : null}) }); manualBonusCreditModal.hidden = true; await loadTracker(); toast('Bonus credit recorded.'); } catch (error) { toast(error.message, true); } finally { button.disabled = false; }
+  });
   trackerIncludeParlays.addEventListener('change', () => { trackerActivityFilter.value = trackerIncludeParlays.checked ? 'all' : 'straight'; loadTracker().catch(error => toast(error.message, true)); });
   trackerSeasonFilter.addEventListener('change', () => { trackerWeekFilter.value = 'all'; refreshVisibleTracker(); });
   trackerWeekFilter.addEventListener('change', refreshVisibleTracker);
@@ -615,7 +621,7 @@
       toast('Later evaluation attached. The original wager remains a manual record.');
     } catch (error) { toast(error.message, true); } finally { button.disabled = false; }
   });
-  document.addEventListener('click', event => { const button = event.target.closest('#btn-save-evaluation'); if (!button) return; const evaluation = window.proplensLatestEvaluation; if (!evaluation) return toast('Evaluate this prop before saving it.', true); $('#save-bet-summary').textContent = `${evaluation.prop.player_name} ${evaluation.prop.side_label} ${evaluation.prop.line} at ${Number(evaluation.prop.bet365_decimal).toFixed(2)}.`; stake.value = evaluation.value.entered_stake ?? 5; betType.value = 'cash'; bonusHelp.hidden = true; saveModal.hidden = false; });
+  document.addEventListener('click', event => { const button = event.target.closest('#btn-save-evaluation'); if (!button) return; const evaluation = window.proplensLatestEvaluation; if (!evaluation) return toast('Evaluate this prop before saving it.', true); $('#save-bet-summary').textContent = `${evaluation.prop.player_name} ${evaluation.prop.side_label} ${evaluation.prop.line} at ${Number(evaluation.prop.bet365_decimal).toFixed(2)}.`; stake.value = evaluation.value.entered_stake ?? window.proplensDefaultStake ?? 5; betType.value = 'cash'; bonusHelp.hidden = true; saveModal.hidden = false; });
   betType.addEventListener('change', () => { bonusHelp.hidden = betType.value !== 'bonus'; });
   $('#btn-save-tracked-bet').addEventListener('click', async event => { const evaluation = window.proplensLatestEvaluation, amount = Number(stake.value); if (!evaluation || !amount || amount <= 0) return toast('Enter the actual stake or bonus-bet value.', true); const button = event.currentTarget; button.disabled = true; try { const { prop, projection, model, value } = evaluation; await api('/api/tracker/bets', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ player_name: prop.player_name, team: prop.team, opponent: prop.opponent, market: prop.market, side_label: prop.side_label, line: prop.line, decimal_odds: prop.bet365_decimal, stake: amount, bet_type: betType.value, projection_mean: projection.mean, model_win_probability: model.win_probability, model_fair_decimal: model.fair_decimal, expected_value_pct: value.expected_value_pct, result_identity: evaluation.result_identity }) }); saveModal.hidden = true; toast('Saved as a pending bet.'); } catch (error) { toast(error.message, true); } finally { button.disabled = false; } });
   trackerList.addEventListener('click', async event => {
@@ -638,13 +644,6 @@
     trackerStatusFilter.value = 'pending';
     pendingAnalysisModal.hidden = true;
     refreshVisibleTracker();
-  });
-  trackerSummary.addEventListener('click', event => { if (event.target.closest('[data-open-unlinked-credits]')) openUnlinkedPromoCredits(); });
-  $('#promo-credit-list').addEventListener('click', event => {
-    const button = event.target.closest('[data-open-promo-credit]'); if (!button) return;
-    promoCreditModal.hidden = true;
-    if (button.dataset.openPromoCredit === 'safety_net') window.proplensSafetyNet.open(button.dataset.promoCreditId);
-    else window.proplensPropProtect.open(button.dataset.promoCreditKind, button.dataset.promoCreditId);
   });
   $('#btn-update-tracked-bet').addEventListener('click', async event => { if (!selectedBet) return; const status = $('#edit-bet-status').value, settlementText = $('#edit-settlement-amount').value.trim(); const body = { bet_type: $('#edit-bet-type').value, stake: Number($('#edit-bet-stake').value), line: Number($('#edit-bet-line').value), decimal_odds: Number($('#edit-bet-odds').value), status, settlement_amount: settlementText ? Number(settlementText) : null }; if (status === 'cashed_out' && !settlementText) return toast('Enter the actual cash-out amount.', true); const button = event.currentTarget; button.disabled = true; try { await api(`/api/tracker/bets/${selectedBet.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); editModal.hidden = true; await loadTracker(); toast('Tracked bet corrected.'); } catch (error) { toast(error.message, true); } finally { button.disabled = false; } });
   $('#btn-confirm-cashout').addEventListener('click', async event => { if (!selectedBet) return; const amount = Number($('#cashout-amount').value); if (!Number.isFinite(amount) || amount < 0) return toast('Enter the actual cash-out amount.', true); const button = event.currentTarget; button.disabled = true; try { await api(`/api/tracker/bets/${selectedBet.id}/settle`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'cashed_out', settlement_amount: amount }) }); cashoutModal.hidden = true; await loadTracker(); toast('Cash-out recorded.'); } catch (error) { toast(error.message, true); } finally { button.disabled = false; } });

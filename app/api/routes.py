@@ -36,6 +36,7 @@ from app.db.projection_snapshot_store import (
 )
 from app.db.raw_odds_snapshot_store import raw_odds_snapshot_store
 from app.db.settings_store import settings_store
+from app.db.manual_bonus_credit_store import manual_bonus_credit_store
 from app.services.result_preview import SUPPORTED_MARKETS, result_preview_service
 from app.services.parlay_result_preview import parlay_result_preview_service
 from app.services.model_research import ModelResearchError, model_research_service
@@ -80,8 +81,10 @@ class SettingsUpdateRequest(BaseModel):
     w_model: float | None = None
     min_ev_threshold: float | None = None
     min_stake: float | None = None
+    default_stake: float | None = None
     odds_api_key: str | None = None
     auto_refresh_seconds: int | None = None
+
 
     @field_validator("odds_api_key")
     @classmethod
@@ -102,6 +105,19 @@ class SettingsUpdateRequest(BaseModel):
         if looks_like_error:
             raise ValueError("Paste only the OddsPapi API key, not an error message or URL.")
         return cleaned
+
+
+class ManualBonusCreditRequest(BaseModel):
+    amount: float
+    season: int | None = None
+    week: int | None = None
+
+    @field_validator("amount")
+    @classmethod
+    def positive_amount(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("Amount must be greater than $0.")
+        return value
 
 
 class PasteUploadRequest(BaseModel):
@@ -1507,6 +1523,37 @@ def evaluate_manual_prop(payload: PropEvaluationRequest) -> dict[str, Any]:
 def list_tracked_bets(include_pending: bool = True) -> dict[str, Any]:
     """Return locally stored straight bets and their cash-aware summary."""
     return {"bets": bet_tracker_store.list(), "summary": bet_tracker_store.summary(include_pending=include_pending)}
+
+
+@router.get("/tracker/manual-bonus-credits")
+def list_manual_bonus_credits() -> dict[str, Any]:
+    return {
+        "sources": [
+            {
+                "id": item["id"],
+                "description": "Manual sportsbook bonus credit",
+                "season": item["season"],
+                "week": item["week"],
+                "created_at": item["created_at"],
+                "receipt": {
+                    "amount": item["amount"],
+                    "confirmed_at": item["created_at"],
+                },
+            }
+            for item in manual_bonus_credit_store.list()
+        ]
+    }
+
+
+@router.post("/tracker/manual-bonus-credits")
+def create_manual_bonus_credit(payload: ManualBonusCreditRequest) -> dict[str, Any]:
+    if (payload.season is None) != (payload.week is None):
+        raise HTTPException(status_code=400, detail="Enter both season and week, or leave both blank.")
+    if payload.season is not None and not 2020 <= payload.season <= 2100:
+        raise HTTPException(status_code=400, detail="Enter a valid NFL season.")
+    if payload.week is not None and not 1 <= payload.week <= 25:
+        raise HTTPException(status_code=400, detail="Enter a valid NFL week.")
+    return {"credit": manual_bonus_credit_store.create(payload.amount, payload.season, payload.week)}
 
 
 @router.get("/tracker/overall-summary")
