@@ -10,6 +10,17 @@
   const playerFields = [...document.querySelectorAll('.manual-player-field')];
   const selectionFields = [...document.querySelectorAll('.manual-selection-field')];
   const weekHelp = $('#manual-week-help');
+  const analystOptions = $('#analyst-options');
+  ['Chris Wecht', 'John Hansen', 'Tom Brolley', 'Alex Pendergrass', 'Russ Miller', 'Paul Kelly', 'Ryan Heath', 'Justin Varnes', 'Joe Dolan', 'Other'].forEach(name => {
+    if (![...analystOptions.options].some(option => option.value === name)) {
+      const option = document.createElement('option');
+      option.value = name;
+      analystOptions.append(option);
+    }
+  });
+  form.querySelector('.manual-form-grid').insertAdjacentHTML('beforeend', '<fieldset class="decision-context"><legend>Decision context <span>optional</span></legend><label>Decision source<select id="manual-decision-source"><option value="">No note</option><option value="analyst">Analyst recommendation</option><option value="hedge">Hedge</option><option value="own_analysis">My own analysis</option><option value="other">Other</option><option value="model">Model only</option></select></label><label>Analyst<input id="manual-analyst" class="number-input" list="analyst-options" placeholder="e.g. Chris Wecht"></label><label>Note<textarea id="manual-decision-note" rows="3" placeholder="Optional reminder for your weekly review"></textarea></label></fieldset>');
+  const manualAnalystLabel = $('#manual-analyst').closest('label');
+  const syncManualDecisionContext = () => { manualAnalystLabel.hidden = $('#manual-decision-source').value !== 'analyst'; };
   const weekOneStarts = { 2026: [2026, 8, 9] };
   let editingId = null;
   let playerMatches = [];
@@ -32,7 +43,7 @@
     ],
     custom: [['custom', 'Other / custom bet']],
   };
-  const positionMarketDefaults = { QB: 'passing_yards', RB: 'rushing_yards', WR: 'receiving_yards', TE: 'receiving_yards' };
+  const positionMarketDefaults = { QB: 'passing_yards', RB: 'rushing_yards', WR: 'receiving_yards', TE: 'receiving_yards', EDGE: 'tackles_assists', DL: 'tackles_assists', LB: 'tackles_assists', DB: 'tackles_assists' };
   window.proplensManualEntryConfig = { markets, positionMarketDefaults };
 
   const value = id => $(id).value.trim();
@@ -115,6 +126,10 @@
     category.value = 'player_prop';
     status.value = 'pending';
     $('#manual-odds').value = '1.86';
+    $('#manual-decision-source').value = '';
+    $('#manual-analyst').value = '';
+    $('#manual-decision-note').value = '';
+    syncManualDecisionContext();
     editingId = null;
     renderMarkets();
     updateSettlementVisibility();
@@ -133,6 +148,10 @@
     if (!description) throw new Error('Enter a short description for this custom bet.');
     if ((season === null) !== (week === null)) throw new Error('Enter both season and NFL week, or leave both blank.');
     if (status.value === 'cashed_out' && settlement === null) throw new Error('Enter the actual cash-out amount.');
+    const decisionSource = value('#manual-decision-source');
+    const analyst = value('#manual-analyst');
+    const note = value('#manual-decision-note');
+    if (decisionSource === 'analyst' && !analyst) throw new Error('Enter the analyst who recommended this bet.');
     return {
       category: category.value,
       description,
@@ -150,6 +169,7 @@
       week,
       status: status.value,
       settlement_amount: settlement,
+      decision_context: decisionSource ? { source: decisionSource, ...(analyst ? { analyst } : {}), ...(note ? { note } : {}) } : null,
     };
   }
 
@@ -157,7 +177,7 @@
     const query = value('#manual-player');
     try {
       const [projectionData, directoryData] = await Promise.all([
-        api(`/api/evaluator/players?q=${encodeURIComponent(query)}&limit=20`),
+        api(`/api/evaluator/players?q=${encodeURIComponent(query)}&limit=20&include_projection_only=true`),
         api(`/api/player-directory/search?q=${encodeURIComponent(query)}&limit=20`),
       ]);
       const projectionPlayers = (projectionData.players || []).map(player => ({ ...player, source: 'projection' }));
@@ -166,7 +186,7 @@
         .filter(player => !projectionKeys.has(`${String(player.player_name).toLowerCase()}|${player.team}`))
         .map(player => ({ ...player, source: 'directory', markets: [] }));
       playerMatches = [...projectionPlayers, ...directoryPlayers];
-      $('#manual-player-options').innerHTML = playerMatches.map(player => `<option value="${player.player_name}">${player.team} · ${player.position} · ${player.source === 'projection' ? 'Active projection' : 'Player directory — no projection'}</option>`).join('');
+      $('#manual-player-options').innerHTML = playerMatches.map(player => `<option value="${player.player_name}">${player.team} · ${player.position} · ${player.source === 'projection' ? (player.projection_only ? 'Defensive projection' : 'Active projection') : 'Player directory — no projection'}</option>`).join('');
       applyPlayerSuggestion();
     } catch (_) {
       playerMatches = [];
@@ -183,7 +203,7 @@
     const positionOption = [...$('#manual-position').options].find(option => option.value === match.position);
     $('#manual-position').value = positionOption ? match.position : 'Other';
     applyDefaultMarketForPosition();
-    source.textContent = match.source === 'projection' ? 'Active projection match — use the evaluator when you are ready.' : 'Player directory — no projection loaded. This remains a tracking-only manual bet.';
+    source.textContent = match.source === 'projection' ? (match.projection_only ? 'Defensive projection found. Tackles + assists is available for manual tracking; model EV is not yet available.' : 'Active projection match — use the evaluator when you are ready.') : 'Player directory — no projection loaded. This remains a tracking-only manual bet.';
     source.classList.toggle('directory', match.source === 'directory');
   }
 
@@ -208,6 +228,10 @@
     $('#manual-type').value = bet.bet_type;
     status.value = bet.status;
     $('#manual-settlement').value = bet.settlement_amount ?? '';
+    $('#manual-decision-source').value = bet.decision_context?.source || '';
+    $('#manual-analyst').value = bet.decision_context?.analyst || '';
+    $('#manual-decision-note').value = bet.decision_context?.note || '';
+    syncManualDecisionContext();
     updateSettlementVisibility();
     $('#manual-bet-title').textContent = 'Edit manual bet';
     $('#btn-save-manual-bet').textContent = 'Save changes';
@@ -219,6 +243,7 @@
   $('#manual-position').addEventListener('change', applyDefaultMarketForPosition);
   $('#manual-season').addEventListener('change', applyWeekSuggestion);
   $('#manual-week').addEventListener('change', rememberManualWeek);
+  $('#manual-decision-source').addEventListener('change', syncManualDecisionContext);
   status.addEventListener('change', updateSettlementVisibility);
   $('#manual-player').addEventListener('input', () => {
     applyPlayerSuggestion();

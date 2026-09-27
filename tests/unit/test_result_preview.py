@@ -77,6 +77,38 @@ def test_preview_proposes_rushing_plus_receiving_from_both_final_stats(monkeypat
     assert proposal["stat_label"] == "rushing + receiving yards"
 
 
+def test_defensive_tackles_assists_preview_uses_both_final_fields(monkeypatch):
+    content = (
+        "season,week,player_display_name,team,opponent_team,def_tackles_solo,def_tackle_assists\n"
+        "2025,1,Quentin Lake,LA,DEN,6,2\n"
+    )
+    monkeypatch.setattr(result_preview_service, "_season_content", lambda season, refresh: (content, "test", True))
+    manual = {
+        **pending_bet(market="tackles_assists", line=7.5, player_name="Quentin Lake", player_key="quentin lake", team="LAR", opponent="DEN"),
+        "entry_origin": "manual",
+    }
+    report = result_preview_service.preview([manual])
+    proposal = report["proposals"][0]
+    assert report["preview_only"] is True
+    assert proposal["status"] == "proposal"
+    assert proposal["proposed_result"] == "won"
+    assert proposal["actual_stat"] == 8.0
+    assert proposal["stat_label"] == "solo tackles + assists"
+    assert manual["status"] == "pending"
+
+
+def test_defensive_preview_does_not_treat_missing_assists_as_zero(monkeypatch):
+    content = (
+        "season,week,player_display_name,team,opponent_team,def_tackles_solo,def_tackle_assists\n"
+        "2025,1,Quentin Lake,LA,DEN,6,\n"
+    )
+    monkeypatch.setattr(result_preview_service, "_season_content", lambda season, refresh: (content, "test", True))
+    bet = pending_bet(market="tackles_assists", line=7.5, player_name="Quentin Lake", player_key="quentin lake", team="LAR", opponent="DEN")
+    proposal = result_preview_service.preview([bet])["proposals"][0]
+    assert proposal["status"] == "player_review"
+    assert "no usable statistic" in proposal["message"]
+
+
 def test_preview_never_assumes_missing_player_has_zero(monkeypatch):
     content = FIXTURE.read_text(encoding="utf-8")
     monkeypatch.setattr(result_preview_service, "_season_content", lambda season, refresh: (content, "2025-09-08T12:00:00+00:00", False))

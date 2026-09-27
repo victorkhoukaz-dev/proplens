@@ -105,7 +105,7 @@ class StateCache:
         with self._lock:
             for p in projections:
                 name_key = p.canonical_name or p.player_name
-                key = f"{name_key}_{p.stat_category.value}".lower()
+                key = f"{name_key}_{p.team}_{p.stat_category.value}".lower()
                 self._projections[key] = p
             self._last_updated = datetime.now(timezone.utc)
 
@@ -115,7 +115,7 @@ class StateCache:
             self._projections = {}
             for p in projections:
                 name_key = p.canonical_name or p.player_name
-                key = f"{name_key}_{p.stat_category.value}".lower()
+                key = f"{name_key}_{p.team}_{p.stat_category.value}".lower()
                 self._projections[key] = p
             self._last_updated = datetime.now(timezone.utc)
 

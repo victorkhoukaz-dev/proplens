@@ -49,6 +49,36 @@ class BetTrackerStore:
             self._write(bets)
             return saved
 
+    def create_many(self, records: list[dict[str, Any]], batch_id: str) -> list[dict[str, Any]]:
+        """Append a reviewed batch once with a single ledger write."""
+        with self._lock:
+            if self.path.exists():
+                try:
+                    current = json.loads(self.path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError) as exc:
+                    raise ValueError("The tracker file could not be read; no batch bets were saved.") from exc
+                if not isinstance(current, dict) or current.get("version") != 1 or not isinstance(current.get("bets"), list):
+                    raise ValueError("The tracker file format is not recognized; no batch bets were saved.")
+                bets = current["bets"]
+            else:
+                bets = []
+            earlier = [bet for bet in bets if bet.get("batch_id") == batch_id]
+            if earlier:
+                if len(earlier) != len(records) or any(
+                    any(saved.get(key) != value for key, value in record.items())
+                    for saved, record in zip(earlier, records)
+                ):
+                    raise ValueError("This batch ID was already saved with different bets.")
+                return earlier
+            created_at = datetime.now(timezone.utc).isoformat()
+            saved = [
+                {**record, "id": str(uuid.uuid4()), "batch_id": batch_id, "status": "pending", "profit": None,
+                 "created_at": created_at, "settled_at": None}
+                for record in records
+            ]
+            self._write([*bets, *saved])
+            return saved
+
     @staticmethod
     def _profit(bet: dict[str, Any], status: str, settlement_amount: float | None = None) -> float:
         stake = float(bet["stake"])

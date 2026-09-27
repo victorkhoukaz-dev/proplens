@@ -54,7 +54,13 @@ async def lifespan(app: FastAPI):
         cache.replace_projections(active_snapshot.projections)
         restored_projections = True
         logger.info("Restored active projection set: %s", active_snapshot.label)
-    elif saved_data and saved_data.projections:
+    defensive_snapshot_id = library.get("active_defensive_id")
+    if defensive_snapshot_id:
+        defensive_snapshot = projection_snapshot_store.get(str(defensive_snapshot_id))
+        cache.store_projections(defensive_snapshot.projections)
+        restored_projections = True
+        logger.info("Restored active defensive projection set: %s", defensive_snapshot.label)
+    if not restored_projections and saved_data and saved_data.projections:
         restored_projections = True
         cache.replace_projections(saved_data.projections)
         first = saved_data.projections[0]

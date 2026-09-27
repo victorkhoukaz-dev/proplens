@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 from app.db.projection_snapshot_store import ProjectionSnapshot, projection_snapshot_store
 from app.schemas.projections import PlayerProjection, StatCategory
-from app.services.model_research import model_research_service
+from app.services.model_research import model_research_annotation_store, model_research_service
 from app.services.result_preview import result_preview_service
 
 
@@ -125,3 +125,20 @@ def test_research_reports_rushing_attempts_from_nflverse_carries(monkeypatch):
     assert report["markets"][0]["market"] == "rushing_attempts"
     assert report["markets"][0]["average_projection"] == 18.2
     assert report["markets"][0]["average_actual"] == 19.0
+
+
+def test_research_keeps_injury_rows_in_all_outcomes_but_excludes_them_from_adjusted_view(monkeypatch):
+    only = snapshot("Only", datetime(2026, 9, 12, 12, tzinfo=timezone.utc), 65)
+    monkeypatch.setattr(projection_snapshot_store, "list", lambda: [only])
+    monkeypatch.setattr(model_research_service, "_schedule_content", lambda refresh: (SCHEDULE, "test", True))
+    monkeypatch.setattr(result_preview_service, "_season_content", lambda season, refresh: (STATS, "test", True))
+    monkeypatch.setattr(model_research_annotation_store, "get_many", lambda record_ids: {
+        record_ids[0]: {"classification": "verified_in_game_injury", "note": "Left early"}
+    })
+
+    report = model_research_service.report(season=2026, through_week=2, include_records=True)
+
+    assert report["markets"][0]["sample_size"] == 1
+    assert report["availability_adjusted"]["excluded_verified_in_game_injuries"] == 1
+    assert report["availability_adjusted"]["markets"] == []
+    assert report["records"][0]["availability_note"] == "Left early"

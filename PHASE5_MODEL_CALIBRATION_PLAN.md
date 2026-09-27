@@ -31,6 +31,20 @@ For each player-market, it:
 
 The report shows coverage, excluded-row reasons, average projection, average actual, bias (actual minus projection), MAE, RMSE, and the ten largest absolute errors. It never changes the live evaluator.
 
+## Phase 5.1 — Player-level drill-down and availability context
+
+The market summary opens a player-level drill-down with the exact selected pre-kickoff snapshot, NFL week, matchup, projected mean, final stat, error, and absolute error. It can be filtered by player, team, and week and sorted by the largest miss or basic row fields.
+
+In-game availability must not be guessed from a low final stat. A row can only receive a special-circumstance annotation after manual confirmation:
+
+- `Verified in-game injury`
+- `Non-injury early exit / benching`
+- `Pre-game inactive or late scratch`
+- `No special circumstance`
+- `Unreviewed`
+
+The normal **All outcomes** view always retains every matched row. The **Availability-adjusted** comparison excludes only manually confirmed in-game injury rows, while visibly reporting how many rows were excluded. The annotation and note are local research metadata only: they never alter the saved FantasyPoints snapshot, actual statistic, bet, parlay, or original evaluation.
+
 ## Phase 5.1 — Projection mean accuracy
 
 Initial reports group by market. Position splits should wait until each subgroup has enough observations to avoid noisy conclusions.

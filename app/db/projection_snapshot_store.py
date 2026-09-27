@@ -30,6 +30,7 @@ class ProjectionSnapshot:
     week: int
     imported_at: datetime
     projections: list[PlayerProjection]
+    kind: str = "offense"
 
     def summary(self, active_id: str | None) -> dict[str, object]:
         matchups = {
@@ -37,22 +38,27 @@ class ProjectionSnapshot:
             for projection in self.projections
             if projection.opponent
         }
+        positions: dict[str, int] = {}
+        for _, position in {((p.canonical_name or p.player_name).lower(), p.position) for p in self.projections}:
+            positions[position] = positions.get(position, 0) + 1
         return {
             "id": self.id,
             "label": self.label,
             "source": self.source,
+            "kind": self.kind,
             "season": self.season,
             "week": self.week,
             "imported_at": self.imported_at.isoformat(),
             "active": self.id == active_id,
-            "player_count": len({(p.canonical_name or p.player_name).lower() for p in self.projections}),
+            "player_count": len({((p.canonical_name or p.player_name).lower(), p.team.upper()) for p in self.projections}),
             "projection_count": len(self.projections),
             "matchup_count": len(matchups),
+            "positions": positions,
         }
 
 
 class ProjectionSnapshotStore:
-    """Persist named projection imports, with exactly one active snapshot."""
+    """Persist imports with one active snapshot per side of the ball."""
 
     def __init__(self, path: Path = DEFAULT_SNAPSHOT_PATH) -> None:
         self.path = path
@@ -62,6 +68,7 @@ class ProjectionSnapshotStore:
         # so typing a player name never reparses every old weekly import.
         self._cached_signature: tuple[str, int | None, int | None] | None = None
         self._cached_active_id: str | None = None
+        self._cached_defensive_id: str | None = None
         self._cached_snapshots: list[ProjectionSnapshot] = []
         self._cached_summaries: list[dict[str, object]] = []
 
@@ -72,20 +79,21 @@ class ProjectionSnapshotStore:
         except OSError:
             return (str(self.path.resolve()), None, None)
 
-    def _refresh_cache(self, active_id: str | None, snapshots: list[ProjectionSnapshot]) -> None:
+    def _refresh_cache(self, active_id: str | None, defensive_id: str | None, snapshots: list[ProjectionSnapshot]) -> None:
         self._cached_signature = self._file_signature()
         self._cached_active_id = active_id
+        self._cached_defensive_id = defensive_id
         self._cached_snapshots = snapshots
         ordered = sorted(snapshots, key=lambda item: item.imported_at, reverse=True)
-        self._cached_summaries = [item.summary(active_id) for item in ordered]
+        self._cached_summaries = [item.summary(defensive_id if item.kind == "defense" else active_id) for item in ordered]
 
-    def _read(self) -> tuple[str | None, list[ProjectionSnapshot]]:
+    def _read(self) -> tuple[str | None, str | None, list[ProjectionSnapshot]]:
         signature = self._file_signature()
         if self._cached_signature == signature:
-            return self._cached_active_id, self._cached_snapshots
+            return self._cached_active_id, self._cached_defensive_id, self._cached_snapshots
         if not self.path.exists():
-            self._refresh_cache(None, [])
-            return None, []
+            self._refresh_cache(None, None, [])
+            return None, None, []
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
             if not isinstance(raw, dict) or raw.get("version") != 1:
@@ -101,24 +109,28 @@ class ProjectionSnapshotStore:
                         week=int(item["week"]),
                         imported_at=datetime.fromisoformat(item["imported_at"]),
                         projections=[PlayerProjection.model_validate(p) for p in item["projections"]],
+                        kind=str(item.get("kind", "offense")),
                     )
                 )
             active_id = raw.get("active_id")
-            self._refresh_cache(active_id, snapshots)
-            return active_id, snapshots
+            defensive_id = raw.get("active_defensive_id")
+            self._refresh_cache(active_id, defensive_id, snapshots)
+            return active_id, defensive_id, snapshots
         except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError, ValidationError):
-            self._refresh_cache(None, [])
-            return None, []
+            self._refresh_cache(None, None, [])
+            return None, None, []
 
-    def _write(self, active_id: str | None, snapshots: list[ProjectionSnapshot]) -> None:
+    def _write(self, active_id: str | None, defensive_id: str | None, snapshots: list[ProjectionSnapshot]) -> None:
         payload = {
             "version": 1,
             "active_id": active_id,
+            "active_defensive_id": defensive_id,
             "snapshots": [
                 {
                     "id": snapshot.id,
                     "label": snapshot.label,
                     "source": snapshot.source,
+                    "kind": snapshot.kind,
                     "season": snapshot.season,
                     "week": snapshot.week,
                     "imported_at": snapshot.imported_at.isoformat(),
@@ -132,25 +144,27 @@ class ProjectionSnapshotStore:
         temporary_path = self.path.with_suffix(".tmp")
         temporary_path.write_text(serialized, encoding="utf-8")
         temporary_path.replace(self.path)
-        self._refresh_cache(active_id, snapshots)
+        self._refresh_cache(active_id, defensive_id, snapshots)
 
     def list_summaries(self) -> dict[str, object]:
         with self._lock:
-            active_id, _ = self._read()
+            active_id, defensive_id, _ = self._read()
             # Return fresh dictionaries so callers cannot mutate cached metadata.
-            return {"active_id": active_id, "snapshots": [dict(item) for item in self._cached_summaries]}
+            return {"active_id": active_id, "active_defensive_id": defensive_id, "snapshots": [dict(item) for item in self._cached_summaries]}
 
     def list(self) -> list[ProjectionSnapshot]:
         """Return immutable saved imports in chronological order for research use."""
         with self._lock:
-            _, snapshots = self._read()
+            _, _, snapshots = self._read()
             return sorted(snapshots, key=lambda item: item.imported_at)
 
-    def create(self, projections: list[PlayerProjection], *, label: str, source: str, season: int, week: int) -> ProjectionSnapshot:
+    def create(self, projections: list[PlayerProjection], *, label: str, source: str, season: int, week: int, kind: str = "offense") -> ProjectionSnapshot:
         if not projections:
             raise ValueError("Cannot save an empty projection snapshot.")
+        if kind not in {"offense", "defense"}:
+            raise ValueError("Projection set kind must be offense or defense.")
         with self._lock:
-            _, snapshots = self._read()
+            active_id, defensive_id, snapshots = self._read()
             snapshot = ProjectionSnapshot(
                 id=str(uuid.uuid4()),
                 label=label.strip() or f"{source} — {season} Week {week}",
@@ -159,14 +173,15 @@ class ProjectionSnapshotStore:
                 week=week,
                 imported_at=datetime.now(timezone.utc),
                 projections=projections,
+                kind=kind,
             )
             snapshots.append(snapshot)
-            self._write(snapshot.id, snapshots)
+            self._write(active_id if kind == "defense" else snapshot.id, snapshot.id if kind == "defense" else defensive_id, snapshots)
             return snapshot
 
     def get(self, snapshot_id: str) -> ProjectionSnapshot:
         with self._lock:
-            _, snapshots = self._read()
+            _, _, snapshots = self._read()
             for snapshot in snapshots:
                 if snapshot.id == snapshot_id:
                     return snapshot
@@ -174,22 +189,22 @@ class ProjectionSnapshotStore:
 
     def activate(self, snapshot_id: str) -> ProjectionSnapshot:
         with self._lock:
-            _, snapshots = self._read()
+            active_id, defensive_id, snapshots = self._read()
             selected = next((item for item in snapshots if item.id == snapshot_id), None)
             if not selected:
                 raise ProjectionSnapshotNotFoundError(snapshot_id)
-            self._write(snapshot_id, snapshots)
+            self._write(active_id if selected.kind == "defense" else snapshot_id, snapshot_id if selected.kind == "defense" else defensive_id, snapshots)
             return selected
 
     def delete(self, snapshot_id: str) -> None:
         with self._lock:
-            active_id, snapshots = self._read()
-            if active_id == snapshot_id:
+            active_id, defensive_id, snapshots = self._read()
+            if active_id == snapshot_id or defensive_id == snapshot_id:
                 raise ValueError("Activate another projection set before deleting the active one.")
             remaining = [snapshot for snapshot in snapshots if snapshot.id != snapshot_id]
             if len(remaining) == len(snapshots):
                 raise ProjectionSnapshotNotFoundError(snapshot_id)
-            self._write(active_id, remaining)
+            self._write(active_id, defensive_id, remaining)
 
 
 projection_snapshot_store = ProjectionSnapshotStore()

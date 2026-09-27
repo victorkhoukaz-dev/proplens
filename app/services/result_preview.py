@@ -24,6 +24,7 @@ SUPPORTED_MARKETS = {
     "rushing_attempts": ("carries", "rushing attempts"),
     "receiving_yards": ("receiving_yards", "receiving yards"),
     "receptions": ("receptions", "receptions"),
+    "tackles_assists": (None, "solo tackles + assists"),
 }
 TOUCHDOWN_STAT_FIELDS = ("rushing_tds", "receiving_tds")
 
@@ -97,6 +98,12 @@ class ResultPreviewService:
             receiving = stats["receiving_yards"]
             stats["rushing_receiving_yards"] = (
                 rushing + receiving if rushing is not None and receiving is not None else None
+            )
+            solo_tackles = _number(raw.get("def_tackles_solo"))
+            tackle_assists = _number(raw.get("def_tackle_assists"))
+            stats["tackles_assists"] = (
+                solo_tackles + tackle_assists
+                if solo_tackles is not None and tackle_assists is not None else None
             )
             rows.append(
                 {

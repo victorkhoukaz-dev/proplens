@@ -10,17 +10,20 @@ import json
 import logging
 from pathlib import Path
 from typing import Any, Literal
+from uuid import UUID
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, Response, UploadFile
 from pydantic import BaseModel, field_validator
 from app.schemas.safety_net import SafetyNetFields
 from app.api.safety_net_routes import router as safety_net_router
 from app.api.prop_protect_routes import router as prop_protect_router
+from app.api.injury_adjusted_parlay_routes import router as injury_adjusted_parlay_router
 
 from datetime import datetime, timezone
 
 from app.adapters.csv_odds_adapter import CSVOddsAdapter
 from app.adapters.fantasypoints import FantasyPointsAdapter
+from app.adapters.fantasypoints_idp import parse_idp_files
 from app.adapters.oddspapi_adapter import OddsPapiAdapter
 from app.core.normalizer import PlayerNameNormalizer, TeamNormalizer
 from app.core.distributions import DistributionEngine, DistributionType
@@ -37,6 +40,7 @@ from app.db.projection_snapshot_store import (
 from app.db.raw_odds_snapshot_store import raw_odds_snapshot_store
 from app.db.settings_store import settings_store
 from app.db.manual_bonus_credit_store import manual_bonus_credit_store
+from app.db.model_research_annotation_store import model_research_annotation_store
 from app.services.result_preview import SUPPORTED_MARKETS, result_preview_service
 from app.services.parlay_result_preview import parlay_result_preview_service
 from app.services.model_research import ModelResearchError, model_research_service
@@ -59,6 +63,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["EV Betting API"])
 router.include_router(safety_net_router)
 router.include_router(prop_protect_router)
+router.include_router(injury_adjusted_parlay_router)
 
 
 
@@ -105,6 +110,31 @@ class SettingsUpdateRequest(BaseModel):
         if looks_like_error:
             raise ValueError("Paste only the OddsPapi API key, not an error message or URL.")
         return cleaned
+
+
+class ModelResearchAnnotationRequest(BaseModel):
+    record_id: str
+    classification: Literal[
+        "unreviewed",
+        "verified_in_game_injury",
+        "non_injury_early_exit",
+        "pre_game_inactive_or_scratch",
+        "no_special_circumstance",
+    ]
+    note: str = ""
+
+    @field_validator("record_id")
+    @classmethod
+    def validate_research_record_id(cls, value: str) -> str:
+        cleaned = value.strip()
+        if len(cleaned) != 24 or not all(character in "0123456789abcdef" for character in cleaned):
+            raise ValueError("Invalid research row identifier.")
+        return cleaned
+
+    @field_validator("note")
+    @classmethod
+    def validate_research_note(cls, value: str) -> str:
+        return value.strip()[:500]
 
 
 class ManualBonusCreditRequest(BaseModel):
@@ -202,6 +232,41 @@ async def extract_screenshot_batch(
     }
 
 
+class DecisionContext(BaseModel):
+    """Placement-time rationale, kept separate from the immutable model snapshot."""
+
+    source: Literal["model", "analyst", "hedge", "own_analysis", "other"]
+    analyst: str | None = None
+    note: str | None = None
+
+    @field_validator("analyst", "note")
+    @classmethod
+    def clean_optional_context_text(cls, value: str | None) -> str | None:
+        cleaned = value.strip() if isinstance(value, str) else None
+        return cleaned or None
+
+
+def _validated_decision_context(
+    context: DecisionContext | None, *, requires_negative_ev_reason: bool = False
+) -> dict[str, Any] | None:
+    """Apply the placement guard without changing any older tracked record."""
+    if context is None:
+        if requires_negative_ev_reason:
+            raise HTTPException(
+                status_code=422,
+                detail="This is a negative-EV model result. Choose a decision source and add an analyst or a short reason before tracking it.",
+            )
+        return None
+    if context.source == "analyst" and not context.analyst:
+        raise HTTPException(status_code=422, detail="Choose or enter the analyst who recommended this bet.")
+    if requires_negative_ev_reason:
+        if context.source == "model":
+            raise HTTPException(status_code=422, detail="A negative-EV model result needs an analyst, hedge, own-analysis, or other reason.")
+        if context.source != "analyst" and not context.note:
+            raise HTTPException(status_code=422, detail="Add a short reason for this negative-EV model result.")
+    return context.model_dump(exclude_none=True)
+
+
 class TrackedBetCreateRequest(BaseModel):
     player_name: str
     team: str
@@ -217,6 +282,7 @@ class TrackedBetCreateRequest(BaseModel):
     model_fair_decimal: float
     expected_value_pct: float
     source_context: dict[str, Any] | None = None
+    decision_context: DecisionContext | None = None
     result_identity: dict[str, Any] | None = None
 
     @field_validator("stake")
@@ -253,6 +319,7 @@ class ManualTrackedBetRequest(BaseModel):
     week: int | None = None
     status: Literal["pending", "won", "lost", "push", "cashed_out", "cancelled"] = "pending"
     settlement_amount: float | None = None
+    decision_context: DecisionContext | None = None
 
     @field_validator("description", "market")
     @classmethod
@@ -301,6 +368,18 @@ class ManualTrackedBetRequest(BaseModel):
     def validate_manual_settlement(cls, value: float | None) -> float | None:
         if value is not None and value < 0:
             raise ValueError("Cash-out amount cannot be negative.")
+        return value
+
+
+class ManualAnytimeTDBatchRequest(BaseModel):
+    batch_id: UUID
+    bets: list[ManualTrackedBetRequest]
+
+    @field_validator("bets")
+    @classmethod
+    def validate_batch_size(cls, value: list[ManualTrackedBetRequest]) -> list[ManualTrackedBetRequest]:
+        if not 1 <= len(value) <= 50:
+            raise ValueError("Enter between 1 and 50 anytime-TD bets per batch.")
         return value
 
 
@@ -414,6 +493,7 @@ class TrackedParlayCreateRequest(SafetyNetFields):
     actual_total_return: float | None = None
     independent_model_probability: float
     personal_sensitivity_probability: float | None = None
+    decision_context: DecisionContext | None = None
 
     @field_validator("legs")
     @classmethod
@@ -499,6 +579,7 @@ class ManualTrackedParlayRequest(SafetyNetFields):
     week: int | None = None
     status: Literal["pending", "won", "lost", "cashed_out", "cancelled", "push_adjusted", "void_adjusted"] = "pending"
     settlement_amount: float | None = None
+    decision_context: DecisionContext | None = None
 
     @field_validator("description")
     @classmethod
@@ -855,7 +936,7 @@ def _rush_receiving_projection(player_name: str) -> PlayerProjection | None:
 
 def _active_projection_context() -> dict[str, Any] | None:
     library = projection_snapshot_store.list_summaries()
-    return next((snapshot for snapshot in library["snapshots"] if snapshot["active"]), None)
+    return next((snapshot for snapshot in library["snapshots"] if snapshot["active"] and snapshot["kind"] == "offense"), None)
 
 
 def _result_identity_for_projection(projection: PlayerProjection) -> dict[str, Any]:
@@ -985,6 +1066,7 @@ def _manual_bet_record(payload: ManualTrackedBetRequest) -> dict[str, Any]:
         "model_fair_decimal": None,
         "expected_value_pct": None,
         "source_context": None,
+        "decision_context": _validated_decision_context(payload.decision_context),
         "result_identity": {
             "version": 1,
             "status": "ready" if preview_eligible else "manual_required",
@@ -1083,6 +1165,7 @@ def _manual_parlay_record(payload: ManualTrackedParlayRequest) -> dict[str, Any]
         "personal_sensitivity_probability": None,
         "season": payload.season,
         "week": payload.week,
+        "decision_context": _validated_decision_context(payload.decision_context),
     }
 
 
@@ -1124,14 +1207,25 @@ def _later_parlay_baseline(parlay: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+def _load_active_projections() -> None:
+    """Keep both active groups in the evaluator cache after an import or switch."""
+    library = projection_snapshot_store.list_summaries()
+    projections: list[PlayerProjection] = []
+    for key in ("active_id", "active_defensive_id"):
+        snapshot_id = library.get(key)
+        if snapshot_id:
+            projections.extend(projection_snapshot_store.get(str(snapshot_id)).projections)
+    cache.replace_projections(projections)
+    persist_loaded_data()
+    pipeline_service.process_data()
+
+
 def _activate_projection_snapshot(snapshot_id: str) -> dict[str, Any]:
     try:
         snapshot = projection_snapshot_store.activate(snapshot_id)
     except ProjectionSnapshotNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Projection set not found.") from exc
-    cache.replace_projections(snapshot.projections)
-    persist_loaded_data()
-    pipeline_service.process_data()
+    _load_active_projections()
     return {"success": True, "active_snapshot": snapshot.summary(snapshot.id)}
 
 
@@ -1152,9 +1246,7 @@ def _save_projection_import(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    cache.replace_projections(snapshot.projections)
-    persist_loaded_data()
-    pipeline_service.process_data()
+    _load_active_projections()
     return {"snapshot": snapshot.summary(snapshot.id), "count": len(projections)}
 
 
@@ -1176,6 +1268,34 @@ def get_mean_accuracy_research(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
+@router.get("/research/mean-accuracy/rows")
+def get_mean_accuracy_research_rows(
+    season: int | None = Query(default=None, ge=2020, le=2100),
+    through_week: int | None = Query(default=None, ge=1, le=25),
+    market: str | None = Query(default=None),
+) -> dict[str, Any]:
+    """Return player-level Phase 5 rows for inspection; never changes research inputs."""
+    report = model_research_service.report(season=season, through_week=through_week, include_records=True)
+    records = report.pop("records", [])
+    if market:
+        records = [record for record in records if record["market"] == market]
+    return {"scope": report["scope"], "market": market, "records": records}
+
+
+@router.post("/research/mean-accuracy/annotations")
+def save_mean_accuracy_research_annotation(payload: ModelResearchAnnotationRequest) -> dict[str, Any]:
+    """Save a manual availability review without changing the actual research row."""
+    try:
+        annotation = model_research_annotation_store.save(
+            record_id=payload.record_id,
+            classification=payload.classification,
+            note=payload.note,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"record_id": payload.record_id, **annotation}
+
+
 @router.post("/projection-library/{snapshot_id}/activate")
 def activate_projection_library_snapshot(snapshot_id: str) -> dict[str, Any]:
     return _activate_projection_snapshot(snapshot_id)
@@ -1193,13 +1313,13 @@ def delete_projection_library_snapshot(snapshot_id: str) -> dict[str, Any]:
 
 
 @router.get("/evaluator/players")
-def get_evaluator_players(q: str = Query("", max_length=80), limit: int = Query(12, ge=1, le=30)) -> dict[str, Any]:
-    """Return projection-backed player choices for the manual evaluator."""
+def get_evaluator_players(q: str = Query("", max_length=80), limit: int = Query(12, ge=1, le=30), include_projection_only: bool = False) -> dict[str, Any]:
+    """Return evaluator choices, optionally including tracking-only IDP players."""
     query = q.strip().lower()
     players: dict[str, dict[str, Any]] = {}
 
     for projection in cache.get_projections():
-        if projection.stat_category not in EVALUATOR_MARKETS:
+        if projection.stat_category not in EVALUATOR_MARKETS and not (include_projection_only and projection.stat_category == StatCategory.TACKLES_ASSISTS):
             continue
         display_name = projection.canonical_name or projection.player_name
         search_text = f"{display_name} {projection.team} {projection.position}".lower()
@@ -1230,10 +1350,11 @@ def get_evaluator_players(q: str = Query("", max_length=80), limit: int = Query(
 
     for player in players.values():
         _add_rush_receiving_market(player)
+        player["projection_only"] = all(market == StatCategory.TACKLES_ASSISTS.value for market in player["markets"])
     ordered = sorted(players.values(), key=lambda player: player["player_name"].lower())[:limit]
     library = projection_snapshot_store.list_summaries()
     active_context = next(
-        (snapshot for snapshot in library["snapshots"] if snapshot["active"]),
+        (snapshot for snapshot in library["snapshots"] if snapshot["active"] and snapshot["kind"] == "offense"),
         None,
     )
     return {
@@ -1322,7 +1443,7 @@ def browse_evaluator_players(
     )[:limit]
     positions = sorted({str(player.position).upper() for player in projections if player.stat_category in EVALUATOR_MARKETS})
     library = projection_snapshot_store.list_summaries()
-    active_context = next((snapshot for snapshot in library["snapshots"] if snapshot["active"]), None)
+    active_context = next((snapshot for snapshot in library["snapshots"] if snapshot["active"] and snapshot["kind"] == "offense"), None)
     return {
         "players": ordered,
         "positions": positions,
@@ -1673,11 +1794,16 @@ def create_tracked_bet(payload: TrackedBetCreateRequest) -> dict[str, Any]:
     source_context = payload.source_context
     if not source_context:
         source_context = _active_projection_context()
+    decision_context = _validated_decision_context(
+        payload.decision_context,
+        requires_negative_ev_reason=payload.expected_value_pct < 0,
+    )
     bet = bet_tracker_store.create(
         {
             **payload.model_dump(exclude={"result_identity"}),
             "entry_origin": "evaluated",
             "source_context": source_context,
+            "decision_context": decision_context,
             "result_identity": _result_identity_for_tracked_bet(payload, source_context),
         }
     )
@@ -1695,6 +1821,29 @@ def create_manual_tracked_bet(payload: ManualTrackedBetRequest) -> dict[str, Any
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"success": True, "bet": bet, "summary": bet_tracker_store.summary()}
+
+
+@router.post("/tracker/bets/manual/anytime-td-batch")
+def create_manual_anytime_td_batch(payload: ManualAnytimeTDBatchRequest) -> dict[str, Any]:
+    """Save reviewed, fully identified anytime-TD straights together or not at all."""
+    records = []
+    for index, bet in enumerate(payload.bets, start=1):
+        if (
+            bet.category != "player_prop" or bet.market != "anytime_td"
+            or str(bet.side_label or "").casefold() != "yes" or bet.line != 0.5
+            or bet.status != "pending" or bet.settlement_amount is not None
+            or not bet.team or not bet.opponent or bet.season is None or bet.week is None
+        ):
+            raise HTTPException(status_code=400, detail=f"Row {index}: enter a pending Anytime TD Yes 0.5 bet with player, team, opponent, season, and week.")
+        record = _manual_bet_record(bet)
+        if record["team"] == record["opponent"]:
+            raise HTTPException(status_code=400, detail=f"Row {index}: team and opponent cannot be the same.")
+        records.append(record)
+    try:
+        saved = bet_tracker_store.create_many(records, str(payload.batch_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"success": True, "bets": saved, "count": len(saved), "summary": bet_tracker_store.summary()}
 
 
 def _evaluate_later_manual_bet(bet: dict[str, Any], player_name: str) -> dict[str, Any]:
@@ -1842,9 +1991,12 @@ def preview_evaluation_refreshes() -> dict[str, Any]:
     """Preview only pending player props whose current model differs from their last saved state."""
     items: list[dict[str, Any]] = []
     unchanged = 0
+    supported_markets = {market.value for market in EVALUATOR_MARKETS}
     candidates = [
         bet for bet in bet_tracker_store.list()
-        if bet.get("status") == "pending" and (bet.get("entry_origin") == "evaluated" or (bet.get("entry_origin") == "manual" and bet.get("category") == "player_prop"))
+        if bet.get("status") == "pending"
+        and bet.get("market") in supported_markets
+        and (bet.get("entry_origin") == "evaluated" or (bet.get("entry_origin") == "manual" and bet.get("category") == "player_prop"))
     ]
     for bet in candidates:
         item: dict[str, Any] = {
@@ -2458,6 +2610,41 @@ async def upload_projections(
         "success": True,
         "message": f"Imported {stored['count']} projections for NFL {season} Week {week}.",
         **stored,
+    }
+
+
+@router.post("/upload/defensive-projections")
+async def upload_defensive_projections(
+    files: list[UploadFile] = File(...),
+    season: int = Form(...),
+    week: int = Form(...),
+    label: str | None = Form(None),
+) -> dict[str, Any]:
+    """Import one complete weekly IDP set from up to four position exports."""
+    if not 2020 <= season <= 2100 or not 1 <= week <= 25:
+        raise HTTPException(status_code=400, detail="Enter a valid NFL season and week.")
+    if not 1 <= len(files) <= 4:
+        raise HTTPException(status_code=400, detail="Choose between one and four defensive CSV files.")
+    contents = [(item.filename or "defensive.csv", await item.read()) for item in files]
+    try:
+        projections, duplicate_count = parse_idp_files(contents, season=season, week=week)
+        snapshot = projection_snapshot_store.create(
+            projections,
+            label=label or f"FantasyPoints defense — {season} Week {week}",
+            source="FantasyPoints IDP CSV",
+            season=season,
+            week=week,
+            kind="defense",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _load_active_projections()
+    return {
+        "success": True,
+        "snapshot": snapshot.summary(snapshot.id),
+        "count": len(projections),
+        "duplicate_count": duplicate_count,
+        "file_count": len(files),
     }
 
 

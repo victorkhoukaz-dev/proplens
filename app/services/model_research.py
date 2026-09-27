@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import math
 import urllib.error
@@ -14,6 +15,7 @@ from zoneinfo import ZoneInfo
 from app.core.normalizer import PlayerNameNormalizer, TeamNormalizer
 from app.db.projection_snapshot_store import ProjectionSnapshot, projection_snapshot_store
 from app.db.result_cache_store import result_cache_store
+from app.db.model_research_annotation_store import model_research_annotation_store
 from app.services.result_preview import ResultPreviewError, result_preview_service
 
 
@@ -118,6 +120,32 @@ class ModelResearchService:
                 })
         return rows
 
+    @staticmethod
+    def _record_id(row: dict[str, Any]) -> str:
+        """Stable identity for one selected snapshot/player-market research row."""
+        value = "|".join(str(row[key]) for key in ("snapshot_id", "season", "week", "team", "opponent", "player_key", "market"))
+        return hashlib.sha256(value.encode("utf-8")).hexdigest()[:24]
+
+    @staticmethod
+    def _market_rows(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        market_rows: list[dict[str, Any]] = []
+        for market in SUPPORTED_MEAN_MARKETS:
+            items = [row for row in records if row["market"] == market]
+            if not items:
+                continue
+            errors = [row["error"] for row in items]
+            market_rows.append({
+                "market": market,
+                "label": SUPPORTED_MEAN_MARKETS[market],
+                "sample_size": len(items),
+                "average_projection": round(sum(row["projection_mean"] for row in items) / len(items), 2),
+                "average_actual": round(sum(row["actual_stat"] for row in items) / len(items), 2),
+                "bias_actual_minus_projection": round(sum(errors) / len(errors), 2),
+                "mae": round(sum(abs(error) for error in errors) / len(errors), 2),
+                "rmse": round(math.sqrt(sum(error * error for error in errors) / len(errors)), 2),
+            })
+        return market_rows
+
     def report(self, *, season: int | None = None, through_week: int | None = None, refresh: bool = False, include_records: bool = False) -> dict[str, Any]:
         snapshots = projection_snapshot_store.list()
         imported = self._snapshot_rows(snapshots, season, through_week)
@@ -203,27 +231,23 @@ class ModelResearchService:
                 "snapshot_id": row["snapshot"].id,
                 "snapshot_label": row["snapshot"].label,
                 "snapshot_imported_at": row["snapshot"].imported_at.isoformat(),
+                "player_key": row["player_key"],
                 "actual_stat": float(actual),
                 "error": round(error, 4),
                 "absolute_error": round(abs(error), 4),
             })
 
-        market_rows: list[dict[str, Any]] = []
-        for market in SUPPORTED_MEAN_MARKETS:
-            records = [row for row in matched if row["market"] == market]
-            if not records:
-                continue
-            errors = [row["error"] for row in records]
-            market_rows.append({
-                "market": market,
-                "label": SUPPORTED_MEAN_MARKETS[market],
-                "sample_size": len(records),
-                "average_projection": round(sum(row["projection_mean"] for row in records) / len(records), 2),
-                "average_actual": round(sum(row["actual_stat"] for row in records) / len(records), 2),
-                "bias_actual_minus_projection": round(sum(errors) / len(errors), 2),
-                "mae": round(sum(abs(error) for error in errors) / len(errors), 2),
-                "rmse": round(math.sqrt(sum(error * error for error in errors) / len(errors)), 2),
-            })
+        for row in matched:
+            row["record_id"] = self._record_id(row)
+        annotations = model_research_annotation_store.get_many([row["record_id"] for row in matched])
+        for row in matched:
+            annotation = annotations.get(row["record_id"], {})
+            row["availability_classification"] = annotation.get("classification", "unreviewed")
+            row["availability_note"] = annotation.get("note", "")
+            row["availability_adjusted_excluded"] = row["availability_classification"] == "verified_in_game_injury"
+
+        market_rows = self._market_rows(matched)
+        availability_adjusted = [row for row in matched if not row["availability_adjusted_excluded"]]
         largest_errors = sorted(matched, key=lambda row: row["absolute_error"], reverse=True)[:10]
         return {
             "success": True,
@@ -236,6 +260,10 @@ class ModelResearchService:
                 "excluded": dict(sorted(excluded.items())),
             },
             "markets": market_rows,
+            "availability_adjusted": {
+                "excluded_verified_in_game_injuries": len(matched) - len(availability_adjusted),
+                "markets": self._market_rows(availability_adjusted),
+            },
             "largest_errors": largest_errors,
             "sources": sources,
             "message": "Descriptive only — this report does not change model coefficients or saved bet history.",

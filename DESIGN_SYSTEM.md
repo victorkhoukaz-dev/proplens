@@ -316,6 +316,7 @@ The fundamental ingredients are the token set, fonts, custom CSS, semantic HTML,
 10. On mobile, stack work in the same logical order and hide only supporting header context; do not remove core actions or force a different workflow.
 11. Require confirmation for permanent/destructive actions and name the consequence explicitly.
 12. Improve current accessibility gaps when building new work without changing the visual hierarchy.
+13. Treat modal fit as a release checkpoint: after adding fields or expanding a modal, verify its primary action remains reachable at a short desktop viewport and a mobile-height viewport. Use a bounded modal height with internal scrolling when content can exceed the viewport.
 
 ## 21. Anti-Patterns
 

@@ -60,15 +60,15 @@
     }
   }
   function renderLibrary(data) {
-    activeSnapshot = data.snapshots.find(snapshot => snapshot.active) || null;
+    activeSnapshot = data.snapshots.find(snapshot => snapshot.active && snapshot.kind !== 'defense') || null;
     if (!data.snapshots.length) {
       libraryList.innerHTML = '<p class="field-help">No saved projection sets yet. Import a weekly projection file to create one.</p>';
       return;
     }
     libraryList.innerHTML = data.snapshots.map(snapshot => `
       <article class="library-item ${snapshot.active ? 'active' : ''}">
-        <div class="library-title-row"><div><h3>${escapeHtml(snapshot.label)}</h3><p>${escapeHtml(snapshot.source)} · NFL ${snapshot.season} Week ${snapshot.week}</p></div>${snapshot.active ? '<span class="active-tag">ACTIVE</span>' : ''}</div>
-        <p>${snapshot.player_count} players · ${snapshot.projection_count} prop projections · ${snapshot.matchup_count} matchups · Imported ${new Date(snapshot.imported_at).toLocaleString()}</p>
+        <div class="library-title-row"><div><h3>${escapeHtml(snapshot.label)}</h3><p>${snapshot.kind === 'defense' ? 'Defense' : 'Offense'} · ${escapeHtml(snapshot.source)} · NFL ${snapshot.season} Week ${snapshot.week}</p></div>${snapshot.active ? '<span class="active-tag">ACTIVE</span>' : ''}</div>
+        <p>${snapshot.player_count} players${snapshot.kind === 'defense' ? ` (${Object.entries(snapshot.positions || {}).sort().map(([position, count]) => `${position} ${count}`).join(', ')})` : ''} · ${snapshot.projection_count} prop projections · ${snapshot.matchup_count} matchups · Imported ${new Date(snapshot.imported_at).toLocaleString()}</p>
         <div class="library-actions">
           ${snapshot.active ? '' : `<button class="library-action" data-activate="${snapshot.id}">Use this set</button>`}
           ${snapshot.active ? '' : `<button class="library-action danger" data-delete="${snapshot.id}">Delete permanently</button>`}
@@ -113,15 +113,25 @@
     return response;
   };
 
+  const defensiveFiles = document.querySelector('#defensive-projection-files');
+  const defensiveButton = document.querySelector('#btn-upload-defensive-projections');
+  defensiveFiles.addEventListener('change', () => { defensiveButton.disabled = !defensiveFiles.files.length || defensiveFiles.files.length > 4; });
   document.addEventListener('click', async event => {
-    const button = event.target.closest('#btn-upload-projections, #btn-paste-projections');
+    const button = event.target.closest('#btn-upload-projections, #btn-paste-projections, #btn-upload-defensive-projections');
     if (!button) return;
     event.preventDefault(); event.stopImmediatePropagation();
     const metadata = importMetadata();
     if (!Number.isInteger(metadata.season) || !Number.isInteger(metadata.week)) return showMessage('Enter a whole-number season and week.', true);
     button.disabled = true; const originalText = button.textContent; button.textContent = 'Importing…';
     try {
-      if (button.id === 'btn-upload-projections') {
+      if (button.id === 'btn-upload-defensive-projections') {
+        if (!defensiveFiles.files.length || defensiveFiles.files.length > 4) throw new Error('Choose one to four defensive CSV files.');
+        const body = new FormData();
+        for (const file of defensiveFiles.files) body.append('files', file);
+        body.append('season', metadata.season); body.append('week', metadata.week); body.append('label', metadata.label);
+        const data = await api('/api/upload/defensive-projections', { method: 'POST', body });
+        showMessage(`${data.count} defensive players imported from ${data.file_count} files; ${data.duplicate_count} repeated rows skipped.`);
+      } else if (button.id === 'btn-upload-projections') {
         const file = document.querySelector('#projection-file').files[0];
         if (!file) throw new Error('Choose a projection file first.');
         const body = new FormData(); body.append('file', file); body.append('season', metadata.season); body.append('week', metadata.week); body.append('label', metadata.label);

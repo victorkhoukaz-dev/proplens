@@ -2,6 +2,7 @@
 (() => {
   const $ = selector => document.querySelector(selector);
   const trackerModal = $('#tracker-modal'), saveModal = $('#save-bet-modal'), editModal = $('#edit-bet-modal'), cashoutModal = $('#cashout-modal'), laterEvaluationModal = $('#later-evaluation-modal'), laterEvaluationHistoryModal = $('#later-evaluation-history-modal'), savedEvaluationModal = $('#saved-evaluation-modal'), batchEvaluationPreviewModal = $('#batch-evaluation-preview-modal');
+  saveModal.querySelector('.modal-card').classList.add('decision-context-card');
   const trackerList = $('#tracker-list'), trackerSummary = $('#tracker-summary'), trackerIncludePending = $('#tracker-include-pending'), trackerIncludeParlays = $('#tracker-include-parlays'), trackerSearch = $('#tracker-search'), trackerSeasonFilter = $('#tracker-season-filter'), trackerWeekFilter = $('#tracker-week-filter'), trackerActivityFilter = $('#tracker-activity-filter'), trackerStatusFilter = $('#tracker-status-filter'), trackerTypeFilter = $('#tracker-type-filter'), trackerSort = $('#tracker-sort'), trackerVisibleCount = $('#tracker-visible-count'), trackerReportContext = $('#tracker-report-context'), betType = $('#tracker-bet-type'), stake = $('#tracker-stake'), bonusHelp = $('#tracker-bonus-help'), checkResults = $('#btn-check-results'), resultPreview = $('#result-preview'), resultPreviewSummary = $('#result-preview-summary'), resultPreviewList = $('#result-preview-list'), toggleResultPreview = $('#btn-toggle-result-preview'), suggestionsOnly = $('#btn-suggestions-only');
   const trackerGameFilter = (() => {
     const select = document.createElement('select');
@@ -27,12 +28,28 @@
     trackerMarketFilter.insertAdjacentElement('afterend', select);
     return select;
   })();
-  let selectedBet = null, selectedLaterEvaluationBet = null, laterEvaluationPlayers = [], latestTrackerData = null, latestOverallSummary = null, latestResultPreview = null, latestParlayResultPreviews = [], latestBatchEvaluationPreview = null, showingSuggestionsOnly = false, visibleParlayIds = [], pendingAnalysisActivity = [];
+  const trackerAnalystFilter = (() => {
+    const select = document.createElement('select');
+    select.id = 'tracker-analyst-filter';
+    select.setAttribute('aria-label', 'Filter by analyst');
+    select.innerHTML = '<option value="all">All analysts</option><option value="__unattributed__">No analyst</option>';
+    trackerSideFilter.insertAdjacentElement('afterend', select);
+    return select;
+  })();
+  let selectedBet = null, selectedLaterEvaluationBet = null, laterEvaluationPlayers = [], latestTrackerData = null, latestOverallSummary = null, latestResultPreview = null, latestParlayResultPreviews = [], latestBatchEvaluationPreview = null, showingSuggestionsOnly = false, visibleParlayIds = [], pendingAnalysisActivity = [], pendingAnalysisFull = false;
   trackerStatusFilter.value = 'pending';
   const pendingAnalysisModal = (() => {
     document.body.insertAdjacentHTML('beforeend', '<div class="modal-backdrop" id="pending-analysis-modal" hidden><section class="modal-card pending-analysis-card" role="dialog" aria-modal="true" aria-labelledby="pending-analysis-title"><button type="button" class="modal-close" id="pending-analysis-close" aria-label="Close">×</button><p class="eyebrow">LIVE TICKET REVIEW</p><h2 id="pending-analysis-title">Pending-bet overview</h2><p id="pending-analysis-context" class="field-help"></p><div id="pending-analysis-content"></div></section></div>');
     const modal = $('#pending-analysis-modal');
     $('#pending-analysis-close').onclick = () => { modal.hidden = true; };
+    modal.addEventListener('click', event => { if (event.target === modal) modal.hidden = true; });
+    return modal;
+  })();
+  let selectedParlayAdjustment = null;
+  const parlayAdjustmentModal = (() => {
+    document.body.insertAdjacentHTML('beforeend', '<div class="modal-backdrop" id="parlay-adjustment-modal" hidden><section class="modal-card compact" role="dialog" aria-modal="true" aria-labelledby="parlay-adjustment-title"><button type="button" class="modal-close" id="parlay-adjustment-close" aria-label="Close">×</button><p class="eyebrow">SPORTSBOOK ADJUSTMENT</p><h2 id="parlay-adjustment-title">Adjusted parlay payout</h2><p id="parlay-adjustment-summary" class="field-help"></p><label>Why was the parlay adjusted?<select id="parlay-adjustment-reason"><option value="push_adjusted">A leg pushed</option><option value="void_adjusted">A leg was voided</option></select></label><label>Actual total amount paid by Bet365 ($)<input id="parlay-adjustment-amount" class="number-input" type="number" min="0" step="0.01"></label><p class="field-help">Use this only when Bet365 paid cash after recalculating the parlay. Bonus-credit settlements use the separate option in More.</p><button type="button" class="secondary-button" id="btn-save-parlay-adjustment">Record adjusted payout</button></section></div>');
+    const modal = $('#parlay-adjustment-modal');
+    $('#parlay-adjustment-close').onclick = () => { modal.hidden = true; };
     modal.addEventListener('click', event => { if (event.target === modal) modal.hidden = true; });
     return modal;
   })();
@@ -130,6 +147,20 @@
     trackerMarketFilter.innerHTML = `<option value="all">All markets</option>${markets.map(market => `<option value="${escapeHtml(market)}">${escapeHtml(marketLabel(market))}</option>`).join('')}`;
     trackerMarketFilter.value = [...trackerMarketFilter.options].some(option => option.value === currentMarket) ? currentMarket : 'all';
   }
+  function analystName(item) {
+    return item.decision_context?.source === 'analyst' ? String(item.decision_context.analyst || '').trim() : '';
+  }
+  function populateAnalystFilter(activity) {
+    const currentAnalyst = trackerAnalystFilter.value;
+    const names = new Map();
+    reportFilteredActivity(activity).forEach(item => {
+      const name = analystName(item);
+      if (name && !names.has(name.toLocaleLowerCase())) names.set(name.toLocaleLowerCase(), name);
+    });
+    const options = [...names.entries()].sort(([, left], [, right]) => left.localeCompare(right));
+    trackerAnalystFilter.innerHTML = `<option value="all">All analysts</option><option value="__unattributed__">No analyst</option>${options.map(([key, name]) => `<option value="${escapeHtml(key)}">${escapeHtml(name)}</option>`).join('')}`;
+    trackerAnalystFilter.value = [...trackerAnalystFilter.options].some(option => option.value === currentAnalyst) ? currentAnalyst : 'all';
+  }
   function reportContextLabel() {
     const season = trackerSeasonFilter.value, week = trackerWeekFilter.value;
     if (season === 'unassigned' || week === 'unassigned') return 'Unassigned records only';
@@ -149,6 +180,7 @@
     if (trackerGameFilter.value !== 'all') labels.push(selectedLabel(trackerGameFilter));
     if (trackerMarketFilter.value !== 'all') labels.push(selectedLabel(trackerMarketFilter));
     if (trackerSideFilter.value !== 'all') labels.push(selectedLabel(trackerSideFilter));
+    if (trackerAnalystFilter.value !== 'all') labels.push(selectedLabel(trackerAnalystFilter));
     if (trackerSearch.value.trim()) labels.push(`Search: ${trackerSearch.value.trim()}`);
     if (showingSuggestionsOnly) labels.push('Result suggestions only');
     return labels.join(' · ');
@@ -184,9 +216,9 @@
   function pendingAnalysisGroups(activity) {
     const players = new Map(), games = new Map(), markets = new Map();
     const ticketKey = ticket => `${ticket.activity_type}:${ticket.id}`;
-    const addTicket = (groups, key, label, ticket, market = null) => {
+    const addTicket = (groups, key, label, ticket, market = null, breakdown = null) => {
       if (!key || !label) return;
-      const entry = groups.get(key) || { key, label, tickets: new Set(), cashStake: 0, bonusStake: 0, markets: new Set() };
+      const entry = groups.get(key) || { key, label, tickets: new Set(), cashStake: 0, bonusStake: 0, markets: new Set(), breakdown: new Map() };
       const id = ticketKey(ticket);
       if (!entry.tickets.has(id)) {
         entry.tickets.add(id);
@@ -194,21 +226,19 @@
         else entry.bonusStake += Number(ticket.stake || 0);
       }
       if (market) entry.markets.add(market);
+      if (breakdown) addTicket(entry.breakdown, breakdown.key, breakdown.label, ticket);
       groups.set(key, entry);
     };
     activity.forEach(ticket => {
       const legs = ticket.activity_type === 'parlay' ? ticket.legs || [] : [ticket];
-      const seenPlayers = new Set(), seenGames = new Set(), seenMarkets = new Set();
       legs.forEach(leg => {
         const player = String(leg.player_name || '').trim();
         const playerKey = player.toLowerCase().replace(/[^a-z0-9]/g, '');
         const market = leg.market ? marketLabel(leg.market) : '';
         const game = gameFilterOption(leg.team, leg.opponent);
-        if (playerKey && playerKey !== 'leg' && !seenPlayers.has(playerKey)) {
-          addTicket(players, playerKey, player, ticket, market); seenPlayers.add(playerKey);
-        }
-        if (game && !seenGames.has(game.key)) { addTicket(games, game.key, game.label, ticket); seenGames.add(game.key); }
-        if (market && !seenMarkets.has(market)) { addTicket(markets, market, market, ticket); seenMarkets.add(market); }
+        if (playerKey && playerKey !== 'leg') addTicket(players, playerKey, player, ticket, market, market ? {key: leg.market, label: market} : null);
+        if (game) addTicket(games, game.key, game.label, ticket, null, market ? {key: leg.market, label: market} : null);
+        if (market) addTicket(markets, leg.market, market, ticket);
       });
     });
     const ranked = groups => [...groups.values()].sort((left, right) => right.tickets.size - left.tickets.size || right.cashStake - left.cashStake || left.label.localeCompare(right.label));
@@ -226,16 +256,29 @@
     if (!entries.length) return '<p class="field-help">No pending tickets with enough information to group here.</p>';
     return entries.slice(0, limit).map(entry => `<div class="pending-analysis-row"><div><strong>${escapeHtml(entry.label)}</strong><small>${escapeHtml(exposureDetails(entry, includeMarkets))}</small></div>${warning ? `<button type="button" data-pending-analysis-search="${escapeHtml(entry.label)}">Show tickets</button>` : ''}</div>`).join('');
   }
+  function fullPendingAnalysisRows(entries, type) {
+    if (!entries.length) return '<p class="field-help">No pending tickets with enough information to group here.</p>';
+    const ranked = rows => [...rows].sort((left, right) => right.cashStake - left.cashStake || right.bonusStake - left.bonusStake || right.tickets.size - left.tickets.size || left.label.localeCompare(right.label));
+    return ranked(entries).map(entry => {
+      const stakes = [`Cash tied: ${money(entry.cashStake)}`];
+      if (entry.bonusStake) stakes.push(`Bonus value tied: ${money(entry.bonusStake)}`);
+      const breakdown = ranked(entry.breakdown.values()).map(part => `<div class="pending-analysis-breakdown-row"><span>${escapeHtml(part.label)}</span><span>${money(part.cashStake)} cash${part.bonusStake ? ` · ${money(part.bonusStake)} bonus` : ''}</span></div>`).join('');
+      return `<details class="pending-analysis-full-row"><summary><span><strong>${escapeHtml(entry.label)}</strong><small>${entry.tickets.size} ticket${entry.tickets.size === 1 ? '' : 's'}${entry.bonusStake ? ` · ${money(entry.bonusStake)} bonus value` : ''}</small></span><b>${money(entry.cashStake)} cash</b></summary><div class="pending-analysis-full-detail"><p>${stakes.join(' · ')}</p>${breakdown || (type === 'market' ? '' : '<p>No market details recorded for these tickets.</p>')}<button type="button" data-pending-analysis-type="${type}" data-pending-analysis-key="${escapeHtml(entry.key)}">Show tickets</button></div></details>`;
+    }).join('');
+  }
   function openPendingAnalysis() {
     const groups = pendingAnalysisGroups(pendingAnalysisActivity);
     const cashTickets = pendingAnalysisActivity.filter(ticket => ticket.bet_type === 'cash'), bonusTickets = pendingAnalysisActivity.filter(ticket => ticket.bet_type === 'bonus'), parlays = pendingAnalysisActivity.filter(ticket => ticket.activity_type === 'parlay');
     const cashRisk = cashTickets.reduce((total, ticket) => total + Number(ticket.stake || 0), 0);
     $('#pending-analysis-context').textContent = `${pendingAnalysisActivity.length} pending ticket${pendingAnalysisActivity.length === 1 ? '' : 's'} · ${reportContextLabel()}. Ticket stake can appear under more than one player or game; those row amounts are not totals to add together.`;
-    $('#pending-analysis-content').innerHTML = `<div class="pending-analysis-summary"><div><span>Cash at risk</span><strong>${money(cashRisk)}</strong></div><div><span>Cash tickets</span><strong>${cashTickets.length}</strong></div><div><span>Bonus tickets</span><strong>${bonusTickets.length}</strong></div><div><span>Parlays</span><strong>${parlays.length}</strong></div></div><section class="pending-analysis-section"><h3>Review repeated players</h3><p>A player appears in more than one pending ticket. Markets are shown so you can decide whether it was intentional.</p>${pendingAnalysisRows(groups.repeats, {limit: 5, warning: true})}</section><div class="pending-analysis-columns"><section class="pending-analysis-section"><h3>Top players</h3>${pendingAnalysisRows(groups.players)}</section><section class="pending-analysis-section"><h3>Top games</h3>${pendingAnalysisRows(groups.games, {includeMarkets: false})}</section><section class="pending-analysis-section"><h3>Markets used</h3>${pendingAnalysisRows(groups.markets, {includeMarkets: false})}</section></div>`;
+    const summary = `<div class="pending-analysis-summary"><div><span>Cash at risk</span><strong>${money(cashRisk)}</strong></div><div><span>Cash tickets</span><strong>${cashTickets.length}</strong></div><div><span>Bonus tickets</span><strong>${bonusTickets.length}</strong></div><div><span>Parlays</span><strong>${parlays.length}</strong></div></div>`;
+    const overview = `<section class="pending-analysis-section"><h3>Review repeated players</h3><p>A player appears in more than one pending ticket. Markets are shown so you can decide whether it was intentional.</p>${pendingAnalysisRows(groups.repeats, {limit: 5, warning: true})}</section><div class="pending-analysis-columns"><section class="pending-analysis-section"><h3>Top players</h3>${pendingAnalysisRows(groups.players)}</section><section class="pending-analysis-section"><h3>Top games</h3>${pendingAnalysisRows(groups.games, {includeMarkets: false})}</section><section class="pending-analysis-section"><h3>Markets used</h3>${pendingAnalysisRows(groups.markets, {includeMarkets: false})}</section></div>`;
+    const full = `<p class="pending-analysis-note">Rows show the full stake of each ticket tied to that player, game, or market. A parlay can appear in multiple rows, including multiple markets within one player or game. These amounts cannot be added together.</p><section class="pending-analysis-section"><h3>All players (${groups.players.length})</h3>${fullPendingAnalysisRows(groups.players, 'player')}</section><section class="pending-analysis-section"><h3>All games (${groups.games.length})</h3>${fullPendingAnalysisRows(groups.games, 'game')}</section><section class="pending-analysis-section"><h3>All markets (${groups.markets.length})</h3>${fullPendingAnalysisRows(groups.markets, 'market')}</section>`;
+    $('#pending-analysis-content').innerHTML = `${summary}<button type="button" class="pending-analysis-toggle" id="pending-analysis-toggle" aria-expanded="${pendingAnalysisFull}">${pendingAnalysisFull ? 'Back to overview' : 'Full breakdown'}</button><div class="pending-analysis-view">${pendingAnalysisFull ? full : overview}</div>`;
     pendingAnalysisModal.hidden = false;
   }
   function filteredActivity(activity) {
-    const search = trackerSearch.value.trim().toLowerCase(), activityType = trackerActivityFilter.value, status = trackerStatusFilter.value, type = trackerTypeFilter.value, game = trackerGameFilter.value, market = trackerMarketFilter.value, side = trackerSideFilter.value;
+    const search = trackerSearch.value.trim().toLowerCase(), activityType = trackerActivityFilter.value, status = trackerStatusFilter.value, type = trackerTypeFilter.value, game = trackerGameFilter.value, market = trackerMarketFilter.value, side = trackerSideFilter.value, analyst = trackerAnalystFilter.value;
     return reportFilteredActivity(activity).filter(item => {
       const matchesSearch = !search || item.activity_search.toLowerCase().includes(search);
       const matchesActivity = activityType === 'all' || item.activity_type === activityType;
@@ -243,8 +286,10 @@
       const matchesGame = game === 'all' || (item.activity_games || []).includes(game);
       const matchesMarket = market === 'all' || (item.activity_type === 'straight' && item.market === market);
       const matchesSide = side === 'all' || (item.activity_type === 'straight' && String(item.side_label || '').trim().toLowerCase() === side);
+      const itemAnalyst = analystName(item);
+      const matchesAnalyst = analyst === 'all' || (analyst === '__unattributed__' ? !itemAnalyst : itemAnalyst.toLocaleLowerCase() === analyst);
       const matchesSuggestions = !showingSuggestionsOnly || (item.activity_type === 'straight' && item.status === 'pending' && resultSuggestionFor(item)?.status === 'proposal');
-      return matchesSearch && matchesActivity && matchesStatus && matchesGame && matchesMarket && matchesSide && matchesSuggestions && (type === 'all' || item.bet_type === type);
+      return matchesSearch && matchesActivity && matchesStatus && matchesGame && matchesMarket && matchesSide && matchesAnalyst && matchesSuggestions && (type === 'all' || item.bet_type === type);
     }).sort((a, b) => {
       if (trackerSort.value === 'pending_first' && (a.status === 'pending') !== (b.status === 'pending')) return a.status === 'pending' ? -1 : 1;
       if (trackerSort.value === 'player') return a.activity_sort_name.localeCompare(b.activity_sort_name);
@@ -293,7 +338,7 @@
     return `<small class="compact-evaluation" style="display:block;flex:0 0 100%;width:100%"><span>${escapeHtml(snapshot.label)}</span> · Projection ${Number.isFinite(projection) ? projection.toFixed(1) : '—'} · Model ${modelPercent(probability)} · Fair ${Number.isFinite(fairOdds) ? fairOdds.toFixed(2) : '—'} · <b class="${ev >= 0 ? 'positive' : 'negative'}">${evText}</b></small>`;
   }
   function moreActions(bet, includeManualOutcomes = false) {
-    const pendingActions = bet.status === 'pending' ? `${includeManualOutcomes ? `<button data-settle="won" data-bet-id="${bet.id}">Won</button><button data-settle="lost" data-bet-id="${bet.id}">Lost</button>` : ''}<button data-settle="push" data-bet-id="${bet.id}">Push</button><button data-cancel="${bet.id}">Cancel before start</button>` : '';
+    const pendingActions = bet.status === 'pending' ? `${includeManualOutcomes ? `<button data-settle="won" data-bet-id="${bet.id}">Won</button><button data-settle="lost" data-bet-id="${bet.id}">Lost</button>` : ''}<span class="action-menu-heading">Sportsbook adjustment</span><button data-settle="push" data-bet-id="${bet.id}">Push</button>` : '';
     const laterEvaluations = bet.later_evaluations || [];
     const refreshes = bet.evaluation_refreshes || [];
     const laterEvaluationAction = bet.entry_origin === 'manual' && bet.category === 'player_prop' ? `<button data-later-evaluate="${bet.id}">${laterEvaluations.length ? 'Evaluate again' : 'Evaluate with projections'}</button>` : '';
@@ -316,7 +361,9 @@
     const origin = bet.entry_origin === 'manual' ? `<span class="manual-entry-tag">Manual</span>${(bet.later_evaluations || []).length ? '<span class="later-evaluation-tag" title="Placed manually and evaluated later with imported projections">Later evaluated</span>' : ''}` : '<span class="evaluated-entry-tag">Evaluated</span>';
     const compactEvaluation = compactEvaluationMarkup(bet);
     const meta = compactEvaluation ? '' : `<small>${matchup}${Number(bet.decimal_odds).toFixed(2)} · ${bet.bet_type === 'bonus' ? 'Bonus' : 'Cash'} · ${money(bet.stake)}</small>`;
-    return `<article class="tracked-bet ${bet.status === 'pending' ? 'is-pending' : 'is-settled'}"><div class="bet-identity${compactEvaluation ? ' has-compact-evaluation' : ''}"${compactEvaluation ? ' style="flex-wrap:wrap"' : ''}>${origin}<strong>${escapeHtml(title)}</strong><span class="bet-prop">${escapeHtml(prop)}</span>${meta}${compactEvaluation}${window.proplensPropProtect.badge(bet, 'straight')}</div><div class="bet-status ${bet.status}"><span>${statusLabel(bet)}</span>${inlineSuggestionMarkup(bet)}${evidence}${settled ? `<strong class="${profit >= 0 ? 'positive' : 'negative'}">${profit >= 0 ? '+' : ''}${money(profit)}</strong>` : ''}</div><div class="settle-actions">${actions}</div></article>`;
+    const analyst = bet.decision_context?.source === 'analyst' ? String(bet.decision_context.analyst || '').trim() : '';
+    const analystBadge = analyst ? `<span class="analyst-source-badge" title="Analyst: ${escapeHtml(analyst)}" aria-label="Analyst: ${escapeHtml(analyst)}">${escapeHtml(analyst)}</span>` : '';
+    return `<article class="tracked-bet ${bet.status === 'pending' ? 'is-pending' : 'is-settled'}"><div class="bet-identity${compactEvaluation ? ' has-compact-evaluation' : ''}"${compactEvaluation ? ' style="flex-wrap:wrap"' : ''}>${origin}<strong>${escapeHtml(title)}</strong><span class="bet-prop">${escapeHtml(prop)}</span>${meta}${compactEvaluation}${window.proplensPropProtect.badge(bet, 'straight')}</div><div class="bet-status ${bet.status}"><div class="bet-status-heading"><span>${statusLabel(bet)}</span>${analystBadge}</div>${inlineSuggestionMarkup(bet)}${evidence}${settled ? `<strong class="${profit >= 0 ? 'positive' : 'negative'}">${profit >= 0 ? '+' : ''}${money(profit)}</strong>` : ''}</div><div class="settle-actions">${actions}</div></article>`;
   }
   function parlayGameKey(leg) {
     const teams = [leg.team, leg.opponent].map(team => String(team || '').trim().toUpperCase()).filter(Boolean).sort();
@@ -369,12 +416,15 @@
     const canConfirm = parlay.status === 'pending' && suggestion?.status === 'proposal' && ['won', 'lost'].includes(suggestion.proposed_result);
     const editAttribute = parlay.entry_origin === 'manual' ? `data-manual-parlay-edit="${parlay.id}"` : `data-parlay-edit="${parlay.id}"`;
     const laterEvaluationAction = ['manual', 'mixed'].includes(parlay.entry_origin) ? `<button data-later-evaluate-parlay="${parlay.id}">Evaluate legs with projections</button>` : '';
-    const manualActions = `<button class="settle-win" data-parlay-settle="won" data-parlay-id="${parlay.id}">Won</button><button data-parlay-settle="lost" data-parlay-id="${parlay.id}">Lost</button><button data-parlay-payout="cashed_out" data-parlay-id="${parlay.id}">Cash out</button><details class="row-more"><summary>More</summary><div class="row-more-menu"><button ${editAttribute}>Edit</button>${laterEvaluationAction}${window.proplensPropProtect.action(parlay, 'parlay')}<button data-parlay-payout="push_adjusted" data-parlay-id="${parlay.id}">Push-adjusted</button><button data-parlay-payout="void_adjusted" data-parlay-id="${parlay.id}">Void-adjusted</button><button data-parlay-settle="cancelled" data-parlay-id="${parlay.id}">Cancel before start</button><button data-parlay-delete="${parlay.id}" class="danger-action">Delete</button></div></details>`;
-    const actions = canConfirm ? `<button class="settle-win confirm-result" data-confirm-parlay-preview="${parlay.id}" data-proposed-result="${suggestion.proposed_result}">Confirm ${suggestion.proposed_result[0].toUpperCase() + suggestion.proposed_result.slice(1)}</button><button data-parlay-payout="cashed_out" data-parlay-id="${parlay.id}">Cash out</button><details class="row-more"><summary>More</summary><div class="row-more-menu"><button ${editAttribute}>Edit</button>${window.proplensPropProtect.action(parlay, 'parlay')}<button data-parlay-payout="push_adjusted" data-parlay-id="${parlay.id}">Push-adjusted</button><button data-parlay-payout="void_adjusted" data-parlay-id="${parlay.id}">Void-adjusted</button><button data-parlay-settle="cancelled" data-parlay-id="${parlay.id}">Cancel before start</button><button data-parlay-delete="${parlay.id}" class="danger-action">Delete</button></div></details>` : manualActions;
+    const injuryAdjustedAction = window.proplensInjuryAdjustedParlay.action(parlay);
+    const bonusCreditActions = `${window.proplensPropProtect.action(parlay, 'parlay')}${injuryAdjustedAction}`;
+    const parlayMoreMenu = includeLaterEvaluation => `<details class="row-more"><summary>More</summary><div class="row-more-menu"><button ${editAttribute}>Edit</button>${includeLaterEvaluation ? laterEvaluationAction : ''}<span class="action-menu-heading">Sportsbook adjustment</span><button data-parlay-adjustment="${parlay.id}">Push or void — enter payout</button>${bonusCreditActions ? `<span class="action-menu-heading">Bonus-credit exception</span>${bonusCreditActions}` : ''}<button data-parlay-delete="${parlay.id}" class="danger-action">Delete</button></div></details>`;
+    const manualActions = `<button class="settle-win" data-parlay-settle="won" data-parlay-id="${parlay.id}">Won</button><button data-parlay-settle="lost" data-parlay-id="${parlay.id}">Lost</button><button data-parlay-payout="cashed_out" data-parlay-id="${parlay.id}">Cash out</button>${parlayMoreMenu(true)}`;
+    const actions = canConfirm ? `<button class="settle-win confirm-result" data-confirm-parlay-preview="${parlay.id}" data-proposed-result="${suggestion.proposed_result}">Confirm ${suggestion.proposed_result[0].toUpperCase() + suggestion.proposed_result.slice(1)}</button><button data-parlay-payout="cashed_out" data-parlay-id="${parlay.id}">Cash out</button>${parlayMoreMenu(false)}` : manualActions;
     const cashoutDetail = parlay.status === 'cashed_out' ? `<small>Received ${money(parlay.settlement_amount)}</small>` : '';
     const expanded = expandedParlayIds.has(parlay.id);
     const legToggle = `<button class="parlay-legs-toggle" data-toggle-parlay-legs="${parlay.id}" aria-expanded="${expanded}">Legs ${parlay.legs.length} ${expanded ? '▴' : '▾'}</button>`;
-    return `<article class="tracked-bet unified-parlay-card ${expanded ? 'is-expanded' : ''} ${parlay.status === 'pending' ? 'is-pending' : 'is-settled'}"><div class="bet-identity"><strong>${escapeHtml(title)}</strong>${meta}${compactEvaluation}${window.proplensSafetyNet.badge(parlay)}${window.proplensPropProtect.badge(parlay, 'parlay')}</div><div class="bet-status ${parlay.status}"><span>${label}</span>${cashoutDetail}${settled ? `<strong class="${profit >= 0 ? 'positive' : 'negative'}">${profit >= 0 ? '+' : ''}${money(profit)}</strong>` : ''}</div><div class="settle-actions">${actions}${legToggle}</div><div class="unified-parlay-legs" ${expanded ? '' : 'hidden'}>${legRows}</div></article>`;
+    return `<article class="tracked-bet unified-parlay-card ${expanded ? 'is-expanded' : ''} ${parlay.status === 'pending' ? 'is-pending' : 'is-settled'}"><div class="bet-identity"><strong>${escapeHtml(title)}</strong>${meta}${compactEvaluation}${window.proplensSafetyNet.badge(parlay)}${window.proplensPropProtect.badge(parlay, 'parlay')}${window.proplensInjuryAdjustedParlay.badge(parlay)}</div><div class="bet-status ${parlay.status}"><span>${label}</span>${cashoutDetail}${settled ? `<strong class="${profit >= 0 ? 'positive' : 'negative'}">${profit >= 0 ? '+' : ''}${money(profit)}</strong>` : ''}</div><div class="settle-actions">${actions}${legToggle}</div><div class="unified-parlay-legs" ${expanded ? '' : 'hidden'}>${legRows}</div></article>`;
   }
   function render(data) {
     latestTrackerData = data; window.proplensTrackedBets = data.bets; window.proplensTrackedParlays = data.parlays;
@@ -383,6 +433,7 @@
     populateWeekFilters(activity);
     populateGameFilter(activity);
     populateMarketFilter(activity);
+    populateAnalystFilter(activity);
     trackerActivityFilter.disabled = !trackerIncludeParlays.checked;
     if (!trackerIncludeParlays.checked) trackerActivityFilter.value = 'straight';
     const reportActivity = reportFilteredActivity(activity);
@@ -395,6 +446,13 @@
     const profit = value => `<strong class="${nonPerformanceStatus ? '' : value >= 0 ? 'positive' : 'negative'}">${nonPerformanceStatus ? '—' : `${value >= 0 ? '+' : ''}${money(value)}`}</strong>`;
     const pendingCashLabel = s.pending_cash_count === 1 ? '1 pending cash bet' : `${s.pending_cash_count} pending cash bets`;
     trackerSummary.innerHTML = `<div title="Cash staked on pending cash bets in the current filtered view. Bonus bets do not put cash at risk."><span>Pending cash at risk</span><strong>${money(s.pending_cash_at_risk)}<small style="margin-left:4px;color:var(--muted);font:500 9px var(--mono)">${pendingCashLabel}</small></strong></div><div><span>Cash-bet P/L</span>${profit(s.cash_profit)}</div><div><span>Bonus-bet cash profit</span>${profit(s.bonus_profit)}</div><div><span>Total net profit</span>${profit(s.total_profit)}</div><div title="Confirmed promo credits. This is promo face value, not cash profit and not part of ROI."><span>Bonus bets received</span><strong class="positive">${money(bonusCredits.received)}</strong><button type="button" class="bonus-credit-balance" data-add-manual-bonus-credit>Add manually</button></div><div><span>Cash-bet ROI</span><strong>${performance(percent(s.cash_roi_pct))}</strong></div><div><span>Total ROI on cash risk</span><strong>${performance(percent(s.total_roi_on_cash_risk_pct))}</strong></div><div><span>Cash wagered in view</span><strong>${money(s.cash_wagered)}</strong></div><div title="All tracked bonus-bet stakes matching the current filtered view."><span>Bonus value wagered</span><strong>${money(s.bonus_value_used ?? s.bonus_stake_used)}</strong></div>`;
+    if (trackerAnalystFilter.value !== 'all') {
+      const bonusCreditCard = trackerSummary.children[4];
+      bonusCreditCard.title = 'Bonus credits are not assigned to analysts, so no analyst-specific amount is available.';
+      const bonusCreditValue = bonusCreditCard.querySelector('strong');
+      bonusCreditValue.textContent = '—';
+      bonusCreditValue.classList.remove('positive');
+    }
     trackerReportContext.textContent = filteredContextLabel();
     $('#tracker-activity-column-label').textContent = trackerIncludeParlays.checked ? 'Activity' : 'Bet';
     trackerVisibleCount.textContent = `Showing ${visibleActivity.length} of ${reportActivity.length}`;
@@ -470,12 +528,13 @@
   }
   async function loadTracker() {
     const pending = trackerIncludePending.checked, parlays = trackerIncludeParlays.checked;
-    const [trackerData, parlayData, safetyNetData, propProtectData, manualCreditData] = await Promise.all([
+    const [trackerData, parlayData, safetyNetData, propProtectData, manualCreditData, injuryAdjustedData] = await Promise.all([
       api(`/api/tracker/bets?include_pending=${pending}`),
       parlays ? api(`/api/tracker/parlays?include_pending=${pending}`) : Promise.resolve({ parlays: [] }),
       parlays ? api('/api/tracker/safety-nets') : Promise.resolve({ sources: [] }),
       api('/api/tracker/prop-protect'),
       api('/api/tracker/manual-bonus-credits'),
+      parlays ? api('/api/tracker/injury-adjusted-parlays') : Promise.resolve({ sources: [] }),
     ]);
     const safetyNetByParlayId = new Map((safetyNetData.sources || []).map(source => [source.id, source]));
     const enrichedParlays = (parlayData.parlays || []).map(parlay => ({
@@ -484,7 +543,7 @@
       prop_protect_summary: (propProtectData.sources || []).find(source => source.kind === 'parlay' && source.id === parlay.id) || null,
     }));
     const propProtectByBetId = new Map((propProtectData.sources || []).filter(source => source.kind === 'straight').map(source => [source.id, source]));
-    render({ ...trackerData, bets: (trackerData.bets || []).map(bet => ({...bet, prop_protect_summary: propProtectByBetId.get(bet.id) || null})), parlays: enrichedParlays, safety_net_sources: safetyNetData.sources || [], prop_protect_sources: propProtectData.sources || [], manual_bonus_credit_sources: manualCreditData.sources || [] });
+    render({ ...trackerData, bets: (trackerData.bets || []).map(bet => ({...bet, prop_protect_summary: propProtectByBetId.get(bet.id) || null})), parlays: enrichedParlays, safety_net_sources: safetyNetData.sources || [], prop_protect_sources: [...(propProtectData.sources || []), ...(injuryAdjustedData.sources || [])], manual_bonus_credit_sources: manualCreditData.sources || [] });
   }
   window.proplensRefreshTracker = loadTracker;
   const findBet = id => (window.proplensTrackedBets || []).find(bet => bet.id === id);
@@ -560,7 +619,7 @@
       const preview = await api('/api/tracker/bets/evaluation-refreshes/preview', { method: 'POST' });
       latestBatchEvaluationPreview = preview;
       const context = preview.projection_context?.label || 'the active projection set';
-      $('#batch-evaluation-preview-summary').textContent = `${preview.changed} changed · ${preview.unchanged} unchanged · ${preview.needs_review} need review · checked against ${context}. Original pre-bet evaluations will not be replaced.`;
+      $('#batch-evaluation-preview-summary').textContent = `${preview.changed} changed · ${preview.unchanged} unchanged · ${preview.needs_review} need review · checked pending manual and originally evaluated bets against ${context}. Tracking-only defensive markets are excluded. Original pre-bet evaluations will not be replaced.`;
       $('#batch-evaluation-preview-list').innerHTML = preview.items.length ? preview.items.map(batchEvaluationPreviewMarkup).join('') : `<p class="field-help">No projection-model changes were detected across ${preview.checked} compatible pending player prop${preview.checked === 1 ? '' : 's'}.</p>`;
       updateBatchEvaluationSaveButton();
       batchEvaluationPreviewModal.hidden = false;
@@ -568,7 +627,7 @@
   }
   const refreshVisibleTracker = () => { if (latestTrackerData) render(latestTrackerData); };
   $('#btn-open-tracker').addEventListener('click', async () => { trackerModal.hidden = false; try { await loadTracker(); } catch (error) { toast(error.message, true); } });
-  analyzePendingButton.addEventListener('click', openPendingAnalysis);
+  analyzePendingButton.addEventListener('click', () => { pendingAnalysisFull = false; openPendingAnalysis(); });
   toggleAllParlays.addEventListener('click', () => {
     const collapse = visibleParlayIds.length > 0 && visibleParlayIds.every(id => expandedParlayIds.has(id));
     visibleParlayIds.forEach(id => collapse ? expandedParlayIds.delete(id) : expandedParlayIds.add(id));
@@ -602,7 +661,7 @@
   trackerIncludeParlays.addEventListener('change', () => { trackerActivityFilter.value = trackerIncludeParlays.checked ? 'all' : 'straight'; loadTracker().catch(error => toast(error.message, true)); });
   trackerSeasonFilter.addEventListener('change', () => { trackerWeekFilter.value = 'all'; refreshVisibleTracker(); });
   trackerWeekFilter.addEventListener('change', refreshVisibleTracker);
-  [trackerSearch, trackerActivityFilter, trackerStatusFilter, trackerTypeFilter, trackerSort, trackerGameFilter, trackerMarketFilter, trackerSideFilter].forEach(control => control.addEventListener('input', refreshVisibleTracker));
+  [trackerSearch, trackerActivityFilter, trackerStatusFilter, trackerTypeFilter, trackerSort, trackerGameFilter, trackerMarketFilter, trackerSideFilter, trackerAnalystFilter].forEach(control => control.addEventListener('input', refreshVisibleTracker));
   $('#btn-start-later-evaluation').addEventListener('click', () => {
     const player = laterEvaluationPlayers[Number($('#later-evaluation-player').value)];
     if (!selectedLaterEvaluationBet || !player) return toast('Choose the imported player before evaluating.', true);
@@ -621,9 +680,13 @@
       toast('Later evaluation attached. The original wager remains a manual record.');
     } catch (error) { toast(error.message, true); } finally { button.disabled = false; }
   });
+  const trackerAnalystLabel = $('#tracker-analyst').closest('label');
+  const syncTrackerDecisionContext = () => { trackerAnalystLabel.hidden = $('#tracker-decision-source').value !== 'analyst'; };
   document.addEventListener('click', event => { const button = event.target.closest('#btn-save-evaluation'); if (!button) return; const evaluation = window.proplensLatestEvaluation; if (!evaluation) return toast('Evaluate this prop before saving it.', true); $('#save-bet-summary').textContent = `${evaluation.prop.player_name} ${evaluation.prop.side_label} ${evaluation.prop.line} at ${Number(evaluation.prop.bet365_decimal).toFixed(2)}.`; stake.value = evaluation.value.entered_stake ?? window.proplensDefaultStake ?? 5; betType.value = 'cash'; bonusHelp.hidden = true; saveModal.hidden = false; });
   betType.addEventListener('change', () => { bonusHelp.hidden = betType.value !== 'bonus'; });
-  $('#btn-save-tracked-bet').addEventListener('click', async event => { const evaluation = window.proplensLatestEvaluation, amount = Number(stake.value); if (!evaluation || !amount || amount <= 0) return toast('Enter the actual stake or bonus-bet value.', true); const button = event.currentTarget; button.disabled = true; try { const { prop, projection, model, value } = evaluation; await api('/api/tracker/bets', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ player_name: prop.player_name, team: prop.team, opponent: prop.opponent, market: prop.market, side_label: prop.side_label, line: prop.line, decimal_odds: prop.bet365_decimal, stake: amount, bet_type: betType.value, projection_mean: projection.mean, model_win_probability: model.win_probability, model_fair_decimal: model.fair_decimal, expected_value_pct: value.expected_value_pct, result_identity: evaluation.result_identity }) }); saveModal.hidden = true; toast('Saved as a pending bet.'); } catch (error) { toast(error.message, true); } finally { button.disabled = false; } });
+  document.addEventListener('click', event => { const button = event.target.closest('#btn-save-evaluation'); if (!button) return; $('#tracker-decision-source').value = ''; $('#tracker-analyst').value = ''; $('#tracker-decision-note').value = ''; syncTrackerDecisionContext(); $('#tracker-decision-help').textContent = Number(window.proplensLatestEvaluation?.value?.expected_value_pct) < 0 ? 'A negative-EV model result needs an analyst, hedge, own-analysis, or other reason before it can be tracked.' : 'This context is saved with the wager for your weekly process review.'; });
+  $('#tracker-decision-source').addEventListener('change', syncTrackerDecisionContext);
+  $('#btn-save-tracked-bet').addEventListener('click', async event => { const evaluation = window.proplensLatestEvaluation, amount = Number(stake.value), source = $('#tracker-decision-source').value, analyst = $('#tracker-analyst').value.trim(), note = $('#tracker-decision-note').value.trim(); if (!evaluation || !amount || amount <= 0) return toast('Enter the actual stake or bonus-bet value.', true); if (Number(evaluation.value.expected_value_pct) < 0 && !source) return toast('Choose why you are tracking this negative-EV model result.', true); if (source === 'analyst' && !analyst) return toast('Enter the analyst who recommended this bet.', true); if (Number(evaluation.value.expected_value_pct) < 0 && source !== 'analyst' && !note) return toast('Add a short reason for this negative-EV model result.', true); const decision_context = source ? { source, ...(analyst ? { analyst } : {}), ...(note ? { note } : {}) } : null; const button = event.currentTarget; button.disabled = true; try { const { prop, projection, model, value } = evaluation; await api('/api/tracker/bets', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ player_name: prop.player_name, team: prop.team, opponent: prop.opponent, market: prop.market, side_label: prop.side_label, line: prop.line, decimal_odds: prop.bet365_decimal, stake: amount, bet_type: betType.value, projection_mean: projection.mean, model_win_probability: model.win_probability, model_fair_decimal: model.fair_decimal, expected_value_pct: value.expected_value_pct, decision_context, result_identity: evaluation.result_identity }) }); saveModal.hidden = true; toast('Saved as a pending bet.'); } catch (error) { toast(error.message, true); } finally { button.disabled = false; } });
   trackerList.addEventListener('click', async event => {
     const button = event.target.closest('button'); if (!button) return;
     if (button.dataset.toggleParlayLegs) { const id = button.dataset.toggleParlayLegs; if (expandedParlayIds.has(id)) expandedParlayIds.delete(id); else expandedParlayIds.add(id); refreshVisibleTracker(); return; }
@@ -632,16 +695,41 @@
     if (button.dataset.viewSavedEvaluation) { const bet = findBet(button.dataset.viewSavedEvaluation); if (bet) showSavedEvaluation(bet); return; }
     if (button.dataset.editManual) return;
     if (button.dataset.confirmParlayPreview) { button.disabled = true; try { const result = button.dataset.proposedResult; await api(`/api/tracker/parlays/${button.dataset.confirmParlayPreview}/confirm-result-preview`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ expected_result: result }) }); latestParlayResultPreviews = latestParlayResultPreviews.filter(item => item.parlay_id !== button.dataset.confirmParlayPreview); toast(`Confirmed parlay ${result} with nflverse evidence saved.`); await loadTracker(); } catch (error) { toast(error.message, true); } finally { button.disabled = false; } return; }
+    if (button.dataset.parlayAdjustment) {
+      selectedParlayAdjustment = (window.proplensTrackedParlays || []).find(parlay => parlay.id === button.dataset.parlayAdjustment);
+      if (!selectedParlayAdjustment) return;
+      $('#parlay-adjustment-summary').textContent = `${selectedParlayAdjustment.description || `${selectedParlayAdjustment.legs.length}-leg parlay`} · ${selectedParlayAdjustment.bet_type === 'bonus' ? 'Bonus bet' : 'Cash bet'}.`;
+      $('#parlay-adjustment-reason').value = 'push_adjusted';
+      $('#parlay-adjustment-amount').value = '';
+      parlayAdjustmentModal.hidden = false;
+      return;
+    }
     if (button.dataset.parlaySettle || button.dataset.parlayPayout || button.dataset.parlayDelete || button.dataset.parlayEdit || button.dataset.manualParlayEdit) return;
     if (button.dataset.edit) { selectedBet = findBet(button.dataset.edit); if (!selectedBet) return; $('#edit-bet-summary').textContent = `${selectedBet.player_name} ${selectedBet.side_label} ${selectedBet.line}`; $('#edit-bet-type').value = selectedBet.bet_type; $('#edit-bet-stake').value = selectedBet.stake; $('#edit-bet-line').value = selectedBet.line; $('#edit-bet-odds').value = selectedBet.decimal_odds; $('#edit-bet-status').value = selectedBet.status; $('#edit-settlement-amount').value = selectedBet.settlement_amount ?? ''; editModal.hidden = false; return; }
     if (button.dataset.cashout) { selectedBet = findBet(button.dataset.cashout); if (!selectedBet) return; $('#cashout-summary').textContent = `${selectedBet.player_name} ${selectedBet.side_label} ${selectedBet.line} · stake ${money(selectedBet.stake)}`; $('#cashout-amount').value = ''; cashoutModal.hidden = false; return; }
-    try { if (button.dataset.confirmPreview) { const result = button.dataset.proposedResult, bet = findBet(button.dataset.confirmPreview); if (!confirmUnevaluatedPlayerPropSettlement(bet)) return; button.disabled = true; await api(`/api/tracker/bets/${button.dataset.confirmPreview}/confirm-result-preview`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ expected_result: result }) }); removeConfirmedSuggestion(button.dataset.confirmPreview); toast(`Confirmed ${result} with nflverse evidence saved.`); } else if (button.dataset.delete) { if (!window.confirm('Delete this tracked bet permanently? This cannot be undone.')) return; await api(`/api/tracker/bets/${button.dataset.delete}`, { method: 'DELETE' }); toast('Tracked bet deleted.'); } else if (button.dataset.cancel) { if (!window.confirm('Cancel this pending bet? It will remain in history with $0.00 profit.')) return; await api(`/api/tracker/bets/${button.dataset.cancel}/settle`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'cancelled' }) }); } else if (button.dataset.settle) { const bet = findBet(button.dataset.betId); if (!confirmUnevaluatedPlayerPropSettlement(bet)) return; await api(`/api/tracker/bets/${button.dataset.betId}/settle`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: button.dataset.settle }) }); } await loadTracker(); } catch (error) { toast(error.message, true); } finally { if (button.dataset.confirmPreview) button.disabled = false; }
+    try { if (button.dataset.confirmPreview) { const result = button.dataset.proposedResult, bet = findBet(button.dataset.confirmPreview); if (!confirmUnevaluatedPlayerPropSettlement(bet)) return; button.disabled = true; await api(`/api/tracker/bets/${button.dataset.confirmPreview}/confirm-result-preview`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ expected_result: result }) }); removeConfirmedSuggestion(button.dataset.confirmPreview); toast(`Confirmed ${result} with nflverse evidence saved.`); } else if (button.dataset.delete) { if (!window.confirm('Delete this tracked bet permanently? This cannot be undone.')) return; await api(`/api/tracker/bets/${button.dataset.delete}`, { method: 'DELETE' }); toast('Tracked bet deleted.'); } else if (button.dataset.settle) { const bet = findBet(button.dataset.betId); if (!confirmUnevaluatedPlayerPropSettlement(bet)) return; await api(`/api/tracker/bets/${button.dataset.betId}/settle`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: button.dataset.settle }) }); } await loadTracker(); } catch (error) { toast(error.message, true); } finally { if (button.dataset.confirmPreview) button.disabled = false; }
+  });
+  $('#btn-save-parlay-adjustment').addEventListener('click', async event => {
+    const amount = Number($('#parlay-adjustment-amount').value);
+    if (!selectedParlayAdjustment || !Number.isFinite(amount) || amount < 0) return toast('Enter the actual amount Bet365 paid.', true);
+    const button = event.currentTarget; button.disabled = true;
+    try {
+      await api(`/api/tracker/parlays/${selectedParlayAdjustment.id}/settle`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: $('#parlay-adjustment-reason').value, settlement_amount: amount }) });
+      parlayAdjustmentModal.hidden = true;
+      await loadTracker();
+      toast('Adjusted parlay payout recorded.');
+    } catch (error) { toast(error.message, true); } finally { button.disabled = false; }
   });
   trackerShowEvaluations.addEventListener('change', () => { if (latestTrackerData) render(latestTrackerData); });
   $('#pending-analysis-content').addEventListener('click', event => {
-    const button = event.target.closest('[data-pending-analysis-search]'); if (!button) return;
-    trackerSearch.value = button.dataset.pendingAnalysisSearch;
+    if (event.target.closest('#pending-analysis-toggle')) { pendingAnalysisFull = !pendingAnalysisFull; openPendingAnalysis(); return; }
+    const button = event.target.closest('[data-pending-analysis-search], [data-pending-analysis-type]'); if (!button) return;
+    const type = button.dataset.pendingAnalysisType;
+    trackerSearch.value = type === 'player' ? pendingAnalysisGroups(pendingAnalysisActivity).players.find(entry => entry.key === button.dataset.pendingAnalysisKey)?.label || '' : type === 'market' ? button.dataset.pendingAnalysisKey : type ? '' : button.dataset.pendingAnalysisSearch;
+    trackerGameFilter.value = type === 'game' ? button.dataset.pendingAnalysisKey : 'all';
+    trackerActivityFilter.value = 'all'; trackerTypeFilter.value = 'all'; trackerMarketFilter.value = 'all'; trackerSideFilter.value = 'all'; trackerAnalystFilter.value = 'all';
     trackerStatusFilter.value = 'pending';
+    showingSuggestionsOnly = false; suggestionsOnly.classList.remove('active');
     pendingAnalysisModal.hidden = true;
     refreshVisibleTracker();
   });

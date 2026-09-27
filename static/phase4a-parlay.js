@@ -24,7 +24,7 @@
             <div id="manual-structured-leg" class="manual-leg-builder">
               <label>Category<select id="manual-leg-category"><option value="player_prop">Player prop</option><option value="game_bet">Game bet</option><option value="custom">Other / custom</option></select></label>
               <label class="manual-leg-player-field">Player<input id="manual-leg-player" class="number-input" list="manual-leg-player-options" autocomplete="off" placeholder="Type or choose a player"><datalist id="manual-leg-player-options"></datalist><small class="manual-player-source" id="manual-leg-player-source"></small></label>
-              <label class="manual-leg-player-field">Position<select id="manual-leg-position"><option value="">Optional</option><option>QB</option><option>RB</option><option>WR</option><option>TE</option><option>K</option><option>DL</option><option>LB</option><option>DB</option><option>Other</option></select></label>
+              <label class="manual-leg-player-field">Position<select id="manual-leg-position"><option value="">Optional</option><option>QB</option><option>RB</option><option>WR</option><option>TE</option><option>K</option><option>EDGE</option><option>DL</option><option>LB</option><option>DB</option><option>Other</option></select></label>
               <label>Market<select id="manual-leg-market"></select></label>
               <label class="manual-leg-selection-field">Side / selection<select id="manual-leg-side"><option value="Over">Over</option><option value="Under">Under</option><option value="Yes">Yes</option><option value="No">No</option><option value="Home">Home</option><option value="Away">Away</option><option value="Other">Other</option></select></label>
               <label class="manual-leg-selection-field">Line <span>optional</span><input id="manual-leg-line" class="number-input" inputmode="decimal" placeholder="e.g. 44.5 or -3.5"></label>
@@ -49,7 +49,7 @@
             <label id="manual-parlay-return-label">Actual total return <span>optional $</span><input id="manual-parlay-return" class="number-input" inputmode="decimal" min="0" placeholder="Overrides boost %"></label>
             <label>Season<input id="manual-parlay-season" class="number-input" inputmode="numeric" value="2026"></label>
             <label>NFL week <span>suggested, editable</span><input id="manual-parlay-week" class="number-input" inputmode="numeric" placeholder="e.g. 1"><small class="manual-week-help" id="manual-parlay-week-help"></small></label>
-            <label>Result<select id="manual-parlay-status"><option value="pending">Pending</option><option value="won">Won</option><option value="lost">Lost</option><option value="cashed_out">Cashed out</option><option value="push_adjusted">Push-adjusted</option><option value="void_adjusted">Void-adjusted</option><option value="cancelled">Cancelled before start</option></select></label>
+            <label>Result<select id="manual-parlay-status"><option value="pending">Pending</option><option value="won">Won</option><option value="lost">Lost</option><option value="cashed_out">Cashed out</option><option value="push_adjusted">Push-adjusted</option><option value="void_adjusted">Void-adjusted</option><option value="cancelled" hidden>Cancelled before start (legacy)</option></select></label>
             <label id="manual-parlay-settlement-field" hidden>Amount paid by Bet365<input id="manual-parlay-settlement" class="number-input" inputmode="decimal" min="0" placeholder="For cash-out or adjustment"></label>
           </div>
           <p class="manual-parlay-return-preview" id="manual-parlay-return-preview">Enter combined odds and stake to preview the result.</p>
@@ -114,7 +114,7 @@
     const query = value('#manual-leg-player');
     try {
       const [projectionData, directoryData] = await Promise.all([
-        api(`/api/evaluator/players?q=${encodeURIComponent(query)}&limit=20`),
+        api(`/api/evaluator/players?q=${encodeURIComponent(query)}&limit=20&include_projection_only=true`),
         api(`/api/player-directory/search?q=${encodeURIComponent(query)}&limit=20`),
       ]);
       const projectionPlayers = (projectionData.players || []).map(player => ({ ...player, source: 'projection' }));
@@ -123,7 +123,7 @@
         .filter(player => !projectionKeys.has(`${String(player.player_name).toLowerCase()}|${player.team}`))
         .map(player => ({ ...player, source: 'directory', markets: [] }));
       playerMatches = [...projectionPlayers, ...directoryPlayers];
-      $('#manual-leg-player-options').innerHTML = playerMatches.map(player => `<option value="${escapeHtml(player.player_name)}">${escapeHtml(player.team)} · ${escapeHtml(player.position)} · ${player.source === 'projection' ? 'Active projection' : 'Player directory — no projection'}</option>`).join('');
+      $('#manual-leg-player-options').innerHTML = playerMatches.map(player => `<option value="${escapeHtml(player.player_name)}">${escapeHtml(player.team)} · ${escapeHtml(player.position)} · ${player.source === 'projection' ? (player.projection_only ? 'Defensive projection' : 'Active projection') : 'Player directory — no projection'}</option>`).join('');
       applyLegPlayerSuggestion();
     } catch (_) { playerMatches = []; $('#manual-leg-player-options').innerHTML = ''; }
   }
@@ -138,7 +138,7 @@
     const positionOption = [...$('#manual-leg-position').options].find(option => option.value === match.position);
     $('#manual-leg-position').value = positionOption ? match.position : 'Other';
     applyDefaultLegMarket();
-    source.textContent = match.source === 'projection' ? 'Active projection match — use the evaluator when you are ready.' : 'Player directory — no projection loaded. This remains a tracking-only manual parlay leg.';
+    source.textContent = match.source === 'projection' ? (match.projection_only ? 'Defensive projection found. This remains a tracking-only manual parlay leg.' : 'Active projection match — use the evaluator when you are ready.') : 'Player directory — no projection loaded. This remains a tracking-only manual parlay leg.';
     source.classList.toggle('directory', match.source === 'directory');
   }
 
