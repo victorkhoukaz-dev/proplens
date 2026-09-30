@@ -73,6 +73,22 @@ def test_manual_parlay_can_be_corrected_and_settled(client):
     assert corrected["status"] == "won"
 
 
+def test_changing_manual_leg_supersedes_old_model_baseline(client):
+    legs = [
+        {"entry_mode": "structured", "description": "A Over 40", "category": "player_prop", "player_name": "Player A", "team": "PHI", "opponent": "DAL", "market": "rushing_yards", "side_label": "Over", "line": 40.5, "decimal_odds": 1.8},
+        {"entry_mode": "structured", "description": "B Over 30", "category": "player_prop", "player_name": "Player B", "team": "DAL", "opponent": "PHI", "market": "receiving_yards", "side_label": "Over", "line": 30.5, "decimal_odds": 1.9},
+    ]
+    parlay = client.post("/api/tracker/parlays/manual", json=payload(legs=legs)).json()["parlay"]
+    parlay_tracker_store.update(parlay["id"], {"later_evaluation_baselines": [{"model_probability": 0.4}]})
+    legs[0] = {**legs[0], "line": 42.5, "description": "A Over 42"}
+
+    response = client.put(f"/api/tracker/parlays/{parlay['id']}/manual", json=payload(legs=legs))
+    assert response.status_code == 200
+    changed = response.json()["parlay"]
+    assert changed["later_evaluation_baselines"] == []
+    assert changed["superseded_later_evaluation_baselines"] == [{"model_probability": 0.4}]
+
+
 def test_manual_bonus_parlay_stores_cash_payout_not_non_returned_bonus_value(client):
     response = client.post(
         "/api/tracker/parlays/manual",

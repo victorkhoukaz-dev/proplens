@@ -44,6 +44,7 @@ from app.db.model_research_annotation_store import model_research_annotation_sto
 from app.services.result_preview import SUPPORTED_MARKETS, result_preview_service
 from app.services.parlay_result_preview import parlay_result_preview_service
 from app.services.model_research import ModelResearchError, model_research_service
+from app.services.research_participation import research_participation_service
 from app.schemas.ev import MatchedEVOpportunity, PropBreakdown
 from app.schemas.projections import PlayerProjection, Position, StatCategory
 from app.schemas.odds import (
@@ -484,6 +485,7 @@ class TrackedParlayLegRequest(BaseModel):
 
 
 class TrackedParlayCreateRequest(SafetyNetFields):
+    description: str | None = None
     legs: list[TrackedParlayLegRequest]
     original_decimal_odds: float
     effective_decimal_odds: float
@@ -494,6 +496,12 @@ class TrackedParlayCreateRequest(SafetyNetFields):
     independent_model_probability: float
     personal_sensitivity_probability: float | None = None
     decision_context: DecisionContext | None = None
+
+    @field_validator("description")
+    @classmethod
+    def clean_parlay_description(cls, value: str | None) -> str | None:
+        cleaned = value.strip() if isinstance(value, str) else None
+        return cleaned or None
 
     @field_validator("legs")
     @classmethod
@@ -667,6 +675,8 @@ class TrackedParlaySettleRequest(BaseModel):
 
 
 class TrackedParlayUpdateRequest(SafetyNetFields):
+    description: str | None = None
+    decision_context: DecisionContext | None = None
     bet_type: Literal["cash", "bonus"]
     stake: float
     original_decimal_odds: float
@@ -675,6 +685,12 @@ class TrackedParlayUpdateRequest(SafetyNetFields):
     actual_total_return: float | None = None
     status: Literal["pending", "won", "lost", "cashed_out", "cancelled", "push_adjusted", "void_adjusted"]
     settlement_amount: float | None = None
+
+    @field_validator("description")
+    @classmethod
+    def clean_updated_parlay_description(cls, value: str | None) -> str | None:
+        cleaned = value.strip() if isinstance(value, str) else None
+        return cleaned or None
 
     @field_validator("stake")
     @classmethod
@@ -716,6 +732,7 @@ class TrackedBetUpdateRequest(BaseModel):
     decimal_odds: float | None = None
     status: Literal["pending", "won", "lost", "push", "cashed_out", "cancelled"] | None = None
     settlement_amount: float | None = None
+    decision_context: DecisionContext | None = None
 
     @field_validator("stake")
     @classmethod
@@ -1171,7 +1188,7 @@ def _manual_parlay_record(payload: ManualTrackedParlayRequest) -> dict[str, Any]
 
 def _manual_parlay_leg_signature(leg: dict[str, Any]) -> tuple[Any, ...]:
     """Identify an unchanged guided leg while preserving its later snapshots on edit."""
-    return tuple(leg.get(field) for field in ("entry_mode", "category", "player_name", "team", "opponent", "market", "side_label", "line"))
+    return tuple(leg.get(field) for field in ("entry_mode", "category", "player_name", "team", "opponent", "market", "side_label", "line", "decimal_odds"))
 
 
 def _later_parlay_baseline(parlay: dict[str, Any]) -> dict[str, Any] | None:
@@ -1280,6 +1297,20 @@ def get_mean_accuracy_research_rows(
     if market:
         records = [record for record in records if record["market"] == market]
     return {"scope": report["scope"], "market": market, "records": records}
+
+
+@router.get("/research/mean-accuracy/unmatched")
+def get_mean_accuracy_unmatched(
+    season: int | None = Query(default=None, ge=2020, le=2100),
+    through_week: int | None = Query(default=None, ge=1, le=25),
+    participation: bool = Query(default=False),
+    refresh_participation: bool = Query(default=False),
+) -> dict[str, Any]:
+    report = model_research_service.report(season=season, through_week=through_week, include_unmatched=True)
+    result = {"scope": report["scope"], "coverage": report["coverage"], "records": report.get("unmatched_records", []), "message": report["message"]}
+    if participation:
+        result.update(research_participation_service.preview(result["records"], refresh_participation))
+    return result
 
 
 @router.post("/research/mean-accuracy/annotations")
@@ -2186,6 +2217,17 @@ def update_tracked_bet(bet_id: str, payload: TrackedBetUpdateRequest) -> dict[st
     changes = payload.model_dump(exclude_unset=True)
     if not changes:
         raise HTTPException(status_code=400, detail="Choose at least one value to update.")
+    if "decision_context" in changes:
+        existing = next((bet for bet in bet_tracker_store.list() if bet["id"] == bet_id), None)
+        if existing is None:
+            raise HTTPException(status_code=404, detail="Tracked bet not found.")
+        changes["decision_context"] = _validated_decision_context(
+            payload.decision_context,
+            requires_negative_ev_reason=(
+                existing.get("expected_value_pct") is not None
+                and existing["expected_value_pct"] < 0
+            ),
+        )
     try:
         bet = bet_tracker_store.update(bet_id, changes)
     except TrackedBetNotFoundError as exc:
@@ -2240,6 +2282,7 @@ def create_tracked_parlay(payload: TrackedParlayCreateRequest) -> dict[str, Any]
     parlay = parlay_tracker_store.create(
         {
             **payload.model_dump(),
+            "decision_context": _validated_decision_context(payload.decision_context),
             "winning_total_return": round(winning_total_return, 2),
             "winning_return_includes_stake": payload.bet_type == "cash",
             "entry_origin": "parlay_evaluator",
@@ -2327,6 +2370,9 @@ def update_manual_tracked_parlay(parlay_id: str, payload: ManualTrackedParlayReq
     if existing.get("entry_origin") != "manual":
         raise HTTPException(status_code=409, detail="Only a manual parlay can be edited here.")
     replacement = _manual_parlay_record(payload)
+    legs_changed = [_manual_parlay_leg_signature(leg) for leg in existing.get("legs") or []] != [
+        _manual_parlay_leg_signature(leg) for leg in replacement["legs"]
+    ]
     prior_by_signature = {_manual_parlay_leg_signature(leg): leg for leg in existing.get("legs") or []}
     for leg in replacement["legs"]:
         prior = prior_by_signature.get(_manual_parlay_leg_signature(leg))
@@ -2335,7 +2381,18 @@ def update_manual_tracked_parlay(parlay_id: str, payload: ManualTrackedParlayReq
     try:
         parlay = parlay_tracker_store.update(
             parlay_id,
-            {**replacement, "status": payload.status, "settlement_amount": payload.settlement_amount},
+            {
+                **replacement,
+                "status": payload.status,
+                "settlement_amount": payload.settlement_amount,
+                **({
+                    "later_evaluation_baselines": [],
+                    "superseded_later_evaluation_baselines": [
+                        *list(existing.get("superseded_later_evaluation_baselines") or []),
+                        *list(existing.get("later_evaluation_baselines") or []),
+                    ],
+                } if legs_changed else {}),
+            },
         )
     except TrackedParlayNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Tracked parlay not found.") from exc
@@ -2401,11 +2458,14 @@ def update_tracked_parlay(parlay_id: str, payload: TrackedParlayUpdateRequest) -
         raise HTTPException(status_code=400, detail="Winning total return cannot be less than the stake.")
     if payload.status in {"cashed_out", "push_adjusted", "void_adjusted"} and payload.settlement_amount is None:
         raise HTTPException(status_code=400, detail="Enter the actual amount paid by Bet365 for this outcome.")
+    changes = payload.model_dump(exclude_unset=True)
+    if "decision_context" in changes:
+        changes["decision_context"] = _validated_decision_context(payload.decision_context)
     try:
         parlay = parlay_tracker_store.update(
             parlay_id,
             {
-                **payload.model_dump(exclude_unset=True),
+                **changes,
                 "winning_total_return": round(winning_total_return, 2),
                 "winning_return_includes_stake": payload.bet_type == "cash",
             },

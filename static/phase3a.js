@@ -4,7 +4,7 @@
   const labels = { passing_yards: 'Passing yards', passing_tds: 'Passing TDs', passing_interceptions: 'Interceptions', rushing_yards: 'Rushing yards', rushing_receiving_yards: 'Rush + receiving yards', rushing_attempts: 'Rushing attempts', receiving_yards: 'Receiving yards', receptions: 'Receptions', anytime_td: 'Anytime TD' };
   const modal = $('#parlay-modal'), list = $('#parlay-leg-list'), count = $('#parlay-leg-count'), oddsInput = $('#parlay-odds'), stakeInput = $('#parlay-stake'), boostInput = $('#parlay-boost'), actualReturnInput = $('#parlay-actual-return'), results = $('#parlay-results'), warning = $('#parlay-warning'), guide = $('#parlay-reading-guide'), clear = $('#btn-clear-parlay'), sensitivityToggle = $('#btn-toggle-parlay-sensitivity'), suggestions = $('#toast-container');
   const key = 'proplens.phase3a.parlay-slip';
-  let legs = [], sensitivityOpen = false;
+  let legs = [], sensitivityOpen = false, replacingIndex = null;
   const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[character]));
   const money = value => `$${Number(value || 0).toFixed(2)}`;
   const percent = value => `${(Number(value) * 100).toFixed(1)}%`;
@@ -29,9 +29,10 @@
     sensitivityToggle.setAttribute('aria-pressed', String(sensitivityOpen));
     sensitivityToggle.textContent = sensitivityOpen ? 'Hide personal sensitivity' : 'Personal sensitivity';
     list.innerHTML = legs.length ? legs.map((leg, index) => {
-      return `<article class="parlay-leg ${sensitivityOpen ? 'sensitivity-open' : ''}"><div><strong>${escapeHtml(legDescription(leg))}</strong><small>${escapeHtml(gameLabel(leg))} · Bet365 ${Number(leg.decimal_odds).toFixed(2)}</small>${sensitivityOpen ? `<label class="parlay-belief-label">Your probability <span>optional · model ${percent(leg.probability)}</span><input class="parlay-belief-input" data-belief-leg="${index}" inputmode="decimal" min="0.1" max="99.9" placeholder="e.g. 45" value="${leg.belief_probability === undefined ? '' : (Number(leg.belief_probability) * 100).toFixed(1)}"></label>` : ''}</div><span class="parlay-leg-prob">${percent(leg.probability)} model</span><button type="button" class="parlay-remove" data-remove-parlay-leg="${index}">Remove</button></article>`;
+      return `<article class="parlay-leg ${sensitivityOpen ? 'sensitivity-open' : ''}"><div><strong>${escapeHtml(legDescription(leg))}</strong><small>${escapeHtml(gameLabel(leg))} · Bet365 ${Number(leg.decimal_odds).toFixed(2)}</small>${sensitivityOpen ? `<label class="parlay-belief-label">Your probability <span>optional · model ${percent(leg.probability)}</span><input class="parlay-belief-input" data-belief-leg="${index}" inputmode="decimal" min="0.1" max="99.9" placeholder="e.g. 45" value="${leg.belief_probability === undefined ? '' : (Number(leg.belief_probability) * 100).toFixed(1)}"></label>` : ''}</div><span class="parlay-leg-prob">${percent(leg.probability)} model</span><span class="parlay-leg-actions"><button type="button" class="parlay-remove" data-edit-parlay-leg="${index}">Re-evaluate</button><button type="button" class="parlay-remove" data-remove-parlay-leg="${index}">Remove</button></span></article>`;
     }).join('') : '<p class="field-help">Evaluate a prop and add it here, or use Track manual parlay for a detailed manual entry. Your temporary slip can hold up to 10 evaluated legs.</p>';
     warning.hidden = !legs.length;
+    if (replacingIndex !== null) list.insertAdjacentHTML('beforeend', `<p class="field-help">Replacing leg ${replacingIndex + 1}: evaluate the corrected prop, then choose Add to parlay. The current leg stays until replacement succeeds. <button type="button" data-cancel-parlay-replace>Cancel replacement</button></p>`);
     warning.innerHTML = sameGame()
         ? '<strong>Same-game legs detected — no true EV verdict yet.</strong> Bet365 can price the relationship between these legs into its SGP odds. The figures below deliberately assume the legs are unrelated, so do not treat a positive or negative result as correlation-adjusted value.'
         : '<strong>Cross-game baseline.</strong> These legs are treated as independent. The result is still a model estimate, not a guaranteed edge.';
@@ -72,15 +73,35 @@
     const probability = Number(model?.win_probability), odds = Number(prop?.bet365_decimal);
     if (!prop || !Number.isFinite(probability) || probability <= 0 || probability >= 1 || !Number.isFinite(odds) || odds <= 1) return toast('Evaluate a complete prop before adding it to a parlay.', true);
     const leg = { player_name: prop.player_name, team: prop.team, opponent: prop.opponent, market: prop.market, side_label: prop.side_label, line: prop.line, decimal_odds: odds, probability, result_identity: data.result_identity || null };
-    if (legs.some(existing => isEvaluatedLeg(existing) && duplicateKey(existing) === duplicateKey(leg))) return toast('That exact leg is already in your parlay slip.', true);
+    if (legs.some((existing, index) => index !== replacingIndex && isEvaluatedLeg(existing) && duplicateKey(existing) === duplicateKey(leg))) return toast('That exact leg is already in your parlay slip.', true);
+    if (replacingIndex !== null) {
+      if (!window.confirm(`Replace leg ${replacingIndex + 1} with this newly evaluated ${leg.player_name} selection?`)) return;
+      legs[replacingIndex] = leg; replacingIndex = null; save(); render(); toast(`${leg.player_name} replaced the selected parlay leg.`); return;
+    }
     if (legs.length >= 10) return toast('A temporary parlay slip can hold up to 10 legs.', true);
     legs.push(leg); save(); render(); toast(`${leg.player_name} added to your parlay slip.`);
   }
+  async function editLeg(index) {
+    const leg = legs[index]; if (!leg) return;
+    try {
+      const response = await fetch(`/api/evaluator/players?q=${encodeURIComponent(leg.player_name)}&limit=20`);
+      if (!response.ok) throw new Error('Could not load this player from current projections.');
+      const data = await response.json();
+      const player = (data.players || []).find(item => item.player_name?.toLowerCase() === String(leg.player_name).toLowerCase() && item.team?.toLowerCase() === String(leg.team).toLowerCase());
+      if (!player) throw new Error('This player is not in the current projections. The slip leg was left unchanged.');
+      replacingIndex = index;
+      modal.hidden = true;
+      window.proplensClearLaterEvaluationTarget?.();
+      window.proplensStartEvaluation(player, { market: leg.market, side: String(leg.side_label).toLowerCase(), line: leg.line, odds: leg.decimal_odds });
+      toast('Review the corrected line and odds, evaluate, then choose Add to parlay to replace this leg.');
+    } catch (error) { toast(error.message, true); }
+  }
+  window.proplensClearParlaySlip = () => { legs = []; replacingIndex = null; sensitivityOpen = false; oddsInput.value = ''; boostInput.value = ''; actualReturnInput.value = ''; stakeInput.value = window.proplensDefaultStake ?? 5; safetyNet.set(null); save(); render(); };
   $('#btn-open-parlay').addEventListener('click', () => { modal.hidden = false; render(); });
-  document.addEventListener('click', event => { const button = event.target.closest('#btn-add-to-parlay'); if (button) addEvaluation(window.proplensLatestEvaluation); const remove = event.target.closest('[data-remove-parlay-leg]'); if (remove) { legs.splice(Number(remove.dataset.removeParlayLeg), 1); save(); render(); } });
+  document.addEventListener('click', event => { const button = event.target.closest('#btn-add-to-parlay'); if (button) addEvaluation(window.proplensLatestEvaluation); const edit = event.target.closest('[data-edit-parlay-leg]'); if (edit) editLeg(Number(edit.dataset.editParlayLeg)); const cancel = event.target.closest('[data-cancel-parlay-replace]'); if (cancel) { replacingIndex = null; render(); } const remove = event.target.closest('[data-remove-parlay-leg]'); if (remove) { const index = Number(remove.dataset.removeParlayLeg); legs.splice(index, 1); if (replacingIndex === index) replacingIndex = null; else if (replacingIndex !== null && replacingIndex > index) replacingIndex -= 1; save(); render(); } });
   sensitivityToggle.addEventListener('click', () => { sensitivityOpen = !sensitivityOpen; render(); });
   list.addEventListener('input', event => { const input = event.target.closest('[data-belief-leg]'); if (!input) return; const value = input.value.trim() === '' ? undefined : Number(input.value) / 100; const index = Number(input.dataset.beliefLeg); if (!Number.isFinite(value) && value !== undefined) return; if (value !== undefined && (value <= 0 || value >= 1)) return toast('Enter a personal probability between 0.1% and 99.9%.', true); legs[index].belief_probability = value; save(); calculate(); });
-  clear.addEventListener('click', () => { if (!window.confirm('Clear every leg from this temporary parlay slip?')) return; legs = []; safetyNet.set(null); save(); render(); });
+  clear.addEventListener('click', () => { if (!window.confirm('Clear every leg from this temporary parlay slip?')) return; window.proplensClearParlaySlip(); });
   [oddsInput, stakeInput, boostInput, actualReturnInput].forEach(input => input.addEventListener('input', calculate));
   load(); render();
 })();

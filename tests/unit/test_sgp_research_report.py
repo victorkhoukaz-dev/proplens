@@ -1,4 +1,12 @@
-from scripts.sgp_research_report import build_pairs
+from scripts.research.sgp_research_report import build_pairs, report_directory
+
+
+def test_report_location_and_legacy_entry_point():
+    from datetime import datetime, timezone
+    from scripts.sgp_research_report import build_pairs as legacy
+    assert legacy is build_pairs
+    output = report_directory(2026, 3, datetime(2026, 9, 30, tzinfo=timezone.utc))
+    assert output.parts[-5:] == ('research', '2026', 'sgp-correlation', 'reports', 'week-03_20260930T000000000000Z')
 
 
 def test_pairing_checks_final_games_market_position_and_participation():

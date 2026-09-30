@@ -8,12 +8,12 @@ results. It does not calculate SGP probabilities, correlation adjustments or EV.
 From the project directory:
 
 ```powershell
-python -m scripts.sgp_research_report --season 2026 --week 1 --refresh
+python -m scripts.research.sgp_research_report --season 2026 --week 1 --refresh
 ```
 
 Omit `--refresh` to reuse cached sources. Each run creates a new dated directory
-under `data/research/`, containing a readable `report.html` and detailed
-`report.json`. These local files are excluded from Git by the existing data rule.
+under `research/SEASON/sgp-correlation/reports/`, containing a readable `report.html` and detailed
+`report.json`. These local season reports remain excluded from Git. Older runs under `data/research/` are preserved and linked from the research home.
 Refreshing updates public nflverse caches; imports and betting records are unchanged.
 
 ## How to read it

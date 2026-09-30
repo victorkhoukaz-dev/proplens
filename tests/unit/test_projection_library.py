@@ -158,6 +158,7 @@ def test_saved_evaluation_captures_result_match_identity(client):
             "model_win_probability": model["win_probability"],
             "model_fair_decimal": model["fair_decimal"],
             "expected_value_pct": value["expected_value_pct"],
+            "decision_context": {"source": "own_analysis", "note": "Test placement rationale"},
             "result_identity": identity,
         },
     )
@@ -252,7 +253,7 @@ def test_pending_evaluated_bet_can_save_updated_projection_without_replacing_pre
             "player_name": prop["player_name"], "team": prop["team"], "opponent": prop["opponent"], "market": prop["market"],
             "side_label": prop["side_label"], "line": prop["line"], "decimal_odds": prop["bet365_decimal"], "stake": 5, "bet_type": "cash",
             "projection_mean": projection["mean"], "model_win_probability": model["win_probability"], "model_fair_decimal": model["fair_decimal"],
-            "expected_value_pct": value["expected_value_pct"], "result_identity": evaluation["result_identity"],
+            "expected_value_pct": value["expected_value_pct"], "decision_context": {"source": "own_analysis", "note": "Test placement rationale"}, "result_identity": evaluation["result_identity"],
         },
     ).json()["bet"]
     original_projection = saved["projection_mean"]

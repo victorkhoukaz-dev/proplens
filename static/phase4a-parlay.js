@@ -39,6 +39,7 @@
               <button type="button" id="btn-add-free-text-legs" class="manual-add-leg-button">Add free-text leg(s)</button>
             </div>
             <div id="manual-parlay-leg-list" class="manual-parlay-leg-list"><p>No legs added yet.</p></div>
+            <button type="button" id="manual-leg-edit-cancel" class="manual-leg-edit-cancel" hidden>Cancel leg edit</button>
           </section>
           <div class="manual-parlay-grid manual-parlay-financials">
             <label>Description <span>optional</span><input id="manual-parlay-description" class="number-input" placeholder="e.g. Sunday games parlay"></label>
@@ -52,6 +53,7 @@
             <label>Result<select id="manual-parlay-status"><option value="pending">Pending</option><option value="won">Won</option><option value="lost">Lost</option><option value="cashed_out">Cashed out</option><option value="push_adjusted">Push-adjusted</option><option value="void_adjusted">Void-adjusted</option><option value="cancelled" hidden>Cancelled before start (legacy)</option></select></label>
             <label id="manual-parlay-settlement-field" hidden>Amount paid by Bet365<input id="manual-parlay-settlement" class="number-input" inputmode="decimal" min="0" placeholder="For cash-out or adjustment"></label>
           </div>
+          <fieldset class="decision-context"><legend>Decision context <span>optional</span></legend><label>Decision source<select id="manual-parlay-decision-source"><option value="">No note</option><option value="model">Model only</option><option value="analyst">Analyst recommendation</option><option value="hedge">Hedge</option><option value="own_analysis">My own analysis</option><option value="other">Other</option></select></label><label id="manual-parlay-analyst-label" hidden>Analyst<input id="manual-parlay-analyst" class="number-input" list="analyst-options" placeholder="e.g. Chris Wecht"></label><label>Note <span>optional</span><textarea id="manual-parlay-decision-note" rows="2" placeholder="Why you placed this parlay"></textarea></label></fieldset>
           <p class="manual-parlay-return-preview" id="manual-parlay-return-preview">Enter combined odds and stake to preview the result.</p>
           <p class="manual-settlement-note">This is tracking-only: no model probability, fair odds, or EV is created. Season/week applies to the full parlay only; leave both blank if its legs span different weeks.</p>
           <button class="secondary-button" id="btn-save-manual-parlay" type="submit">Save manual parlay</button>
@@ -67,10 +69,12 @@
   const legMarket = $('#manual-leg-market');
   let editingId = null;
   let draftLegs = [];
+  let editingLegIndex = null;
   let playerMatches = [];
   let playerSearchTimer = null;
   const safetyNet = window.proplensSafetyNet.mount($('.manual-parlay-financials'), {stake: () => Number($('#manual-parlay-stake').value), type: () => $('#manual-parlay-type').value, changed: updateReturnPreview});
   const safetyPreview = document.createElement('div'); safetyNet.root.insertAdjacentElement('afterend', safetyPreview);
+  const syncDecisionContext = () => { $('#manual-parlay-analyst-label').hidden = $('#manual-parlay-decision-source').value !== 'analyst'; };
 
   const value = id => $(id).value.trim();
   const numberOrNull = id => value(id) === '' ? null : Number(value(id));
@@ -152,17 +156,45 @@
 
   function renderDraftLegs() {
     $('#manual-parlay-leg-count').textContent = `${draftLegs.length} of 10 added`;
-    $('#manual-parlay-leg-list').innerHTML = draftLegs.length ? draftLegs.map((leg, index) => `<article><div><strong>${escapeHtml(leg.description)}</strong><small>${leg.entry_mode === 'structured' ? 'Guided leg' : 'Free-text leg'}${leg.team ? ` · ${escapeHtml(leg.team)}${leg.opponent ? ` vs ${escapeHtml(leg.opponent)}` : ''}` : ''}${Number.isFinite(leg.decimal_odds) ? ` · ${leg.decimal_odds.toFixed(2)} odds` : ''}</small></div><button type="button" data-remove-manual-leg="${index}" aria-label="Remove ${escapeHtml(leg.description)}">Remove</button></article>`).join('') : '<p>No legs added yet. Add at least two before saving.</p>';
+    $('#manual-parlay-leg-list').innerHTML = draftLegs.length ? draftLegs.map((leg, index) => `<article><div><strong>${escapeHtml(leg.description)}</strong><small>${leg.entry_mode === 'structured' ? 'Guided leg' : 'Free-text leg'}${leg.team ? ` · ${escapeHtml(leg.team)}${leg.opponent ? ` vs ${escapeHtml(leg.opponent)}` : ''}` : ''}${Number.isFinite(leg.decimal_odds) ? ` · ${leg.decimal_odds.toFixed(2)} odds` : ''}</small></div><span class="manual-leg-actions"><button type="button" data-edit-manual-leg="${index}" aria-label="Edit ${escapeHtml(leg.description)}">Edit</button><button type="button" data-remove-manual-leg="${index}" aria-label="Remove ${escapeHtml(leg.description)}">Remove</button></span></article>`).join('') : '<p>No legs added yet. Add at least two before saving.</p>';
+  }
+
+  function stopLegEdit() {
+    editingLegIndex = null;
+    $('#btn-add-guided-leg').textContent = 'Add guided leg';
+    $('#btn-add-free-text-legs').textContent = 'Add free-text leg(s)';
+    $('#manual-leg-edit-cancel').hidden = true;
+  }
+
+  function editDraftLeg(index) {
+    const leg = draftLegs[index]; if (!leg) return;
+    editingLegIndex = index;
+    $('#manual-leg-edit-cancel').hidden = false;
+    if (leg.entry_mode === 'free_text') {
+      setLegMode('free_text'); $('#manual-free-text-legs').value = leg.description;
+      $('#btn-add-free-text-legs').textContent = 'Save this leg';
+      $('#manual-free-text-legs').focus();
+    } else {
+      setLegMode('structured'); legCategory.value = leg.category || 'player_prop'; renderLegMarkets(leg.market);
+      $('#manual-leg-player').value = leg.player_name || ''; $('#manual-leg-position').value = leg.position || '';
+      $('#manual-leg-team').value = leg.team || ''; $('#manual-leg-opponent').value = leg.opponent || '';
+      $('#manual-leg-side').value = leg.side_label || 'Over'; $('#manual-leg-line').value = leg.line ?? '';
+      $('#manual-leg-odds').value = leg.decimal_odds ?? ''; $('#manual-leg-description').value = leg.description === generatedLegDescription() ? '' : leg.description || '';
+      $('#btn-add-guided-leg').textContent = 'Save this leg';
+      $('#manual-leg-player').focus();
+    }
   }
 
   function addGuidedLeg() {
-    if (draftLegs.length >= 10) return toast('A manual parlay can contain up to 10 legs.', true);
+    if (editingLegIndex === null && draftLegs.length >= 10) return toast('A manual parlay can contain up to 10 legs.', true);
     const category = legCategory.value;
     const description = value('#manual-leg-description') || generatedLegDescription();
     if (!description) return toast(category === 'player_prop' ? 'Choose or type a player.' : 'Enter enough details to describe this leg.', true);
     const decimalOdds = numberOrNull('#manual-leg-odds');
     if (decimalOdds !== null && (!Number.isFinite(decimalOdds) || decimalOdds <= 1)) return toast('Enter decimal odds above 1.00, or leave the field blank.', true);
-    draftLegs.push({ entry_mode: 'structured', description, category, player_name: category === 'player_prop' ? value('#manual-leg-player') || null : null, position: category === 'player_prop' ? value('#manual-leg-position') || null : null, team: value('#manual-leg-team') || null, opponent: value('#manual-leg-opponent') || null, market: legMarket.value || null, side_label: category === 'custom' ? null : value('#manual-leg-side') || null, line: category === 'custom' ? null : numberOrNull('#manual-leg-line'), decimal_odds: decimalOdds });
+    const leg = { entry_mode: 'structured', description, category, player_name: category === 'player_prop' ? value('#manual-leg-player') || null : null, position: category === 'player_prop' ? value('#manual-leg-position') || null : null, team: value('#manual-leg-team') || null, opponent: value('#manual-leg-opponent') || null, market: legMarket.value || null, side_label: category === 'custom' ? null : value('#manual-leg-side') || null, line: category === 'custom' ? null : numberOrNull('#manual-leg-line'), decimal_odds: decimalOdds };
+    if (editingLegIndex === null) draftLegs.push(leg); else draftLegs[editingLegIndex] = leg;
+    stopLegEdit();
     $('#manual-leg-description').value = ''; $('#manual-leg-line').value = ''; $('#manual-leg-odds').value = ''; if (category === 'player_prop') $('#manual-leg-player').value = '';
     renderDraftLegs();
   }
@@ -170,15 +202,19 @@
   function addFreeTextLegs() {
     const descriptions = value('#manual-free-text-legs').split(/\r?\n/).map(item => item.trim()).filter(Boolean);
     if (!descriptions.length) return toast('Enter at least one free-text leg.', true);
-    if (draftLegs.length + descriptions.length > 10) return toast('A manual parlay can contain up to 10 legs.', true);
-    draftLegs.push(...descriptions.map(description => ({ entry_mode: 'free_text', description })));
+    if (editingLegIndex !== null && descriptions.length !== 1) return toast('Edit one free-text leg at a time.', true);
+    if (draftLegs.length + descriptions.length > 10 && editingLegIndex === null) return toast('A manual parlay can contain up to 10 legs.', true);
+    if (editingLegIndex === null) draftLegs.push(...descriptions.map(description => ({ entry_mode: 'free_text', description })));
+    else draftLegs[editingLegIndex] = { entry_mode: 'free_text', description: descriptions[0] };
+    stopLegEdit();
     $('#manual-free-text-legs').value = ''; renderDraftLegs();
   }
 
   function resetForm() {
-    form.reset(); safetyNet.set(null); editingId = null; draftLegs = []; $('#manual-parlay-season').value = '2026'; status.value = 'pending'; legCategory.value = 'player_prop';
+    form.reset(); safetyNet.set(null); editingId = null; draftLegs = []; stopLegEdit(); $('#manual-parlay-season').value = '2026'; status.value = 'pending'; legCategory.value = 'player_prop';
     $('#manual-leg-player-source').textContent = ''; $('#manual-leg-player-source').classList.remove('directory');
     renderLegMarkets(); setLegMode('structured'); renderDraftLegs(); applyWeekSuggestion(); updateSettlementVisibility(); updateReturnPreview();
+    syncDecisionContext();
     $('#manual-parlay-title').textContent = 'Track a manual parlay'; $('#btn-save-manual-parlay').textContent = 'Save manual parlay';
   }
 
@@ -187,23 +223,30 @@
     if (draftLegs.length < 2) throw new Error('Add at least two parlay legs.');
     if ((season === null) !== (week === null)) throw new Error('Enter both season and NFL week, or leave both blank.');
     if (['cashed_out', 'push_adjusted', 'void_adjusted'].includes(status.value) && settlement === null) throw new Error('Enter the actual amount paid by Bet365.');
-    return { safety_net: safetyNet.value(), description: value('#manual-parlay-description') || null, legs: draftLegs, decimal_odds: Number(value('#manual-parlay-odds')), stake: Number(value('#manual-parlay-stake')), bet_type: value('#manual-parlay-type'), profit_boost_pct: numberOrNull('#manual-parlay-boost') || 0, actual_total_return: numberOrNull('#manual-parlay-return'), season, week, status: status.value, settlement_amount: settlement };
+    const source = value('#manual-parlay-decision-source'), analyst = value('#manual-parlay-analyst'), note = value('#manual-parlay-decision-note');
+    if (source === 'analyst' && !analyst) throw new Error('Choose or enter the analyst who recommended this parlay.');
+    return { safety_net: safetyNet.value(), description: value('#manual-parlay-description') || null, decision_context: source ? { source, ...(source === 'analyst' ? { analyst } : {}), ...(note ? { note } : {}) } : null, legs: draftLegs, decimal_odds: Number(value('#manual-parlay-odds')), stake: Number(value('#manual-parlay-stake')), bet_type: value('#manual-parlay-type'), profit_boost_pct: numberOrNull('#manual-parlay-boost') || 0, actual_total_return: numberOrNull('#manual-parlay-return'), season, week, status: status.value, settlement_amount: settlement };
   }
 
   function openForEdit(parlay) {
+    stopLegEdit();
     editingId = parlay.id;
     draftLegs = parlay.legs.map(leg => ({ entry_mode: leg.entry_mode || (leg.market === 'manual' ? 'free_text' : 'structured'), description: leg.description || leg.player_name, category: leg.category || null, player_name: leg.entry_mode === 'structured' ? leg.player_name : null, position: leg.position || leg.result_identity?.position || null, team: leg.team || null, opponent: leg.opponent || null, market: leg.market === 'manual' ? null : leg.market, side_label: leg.side_label || null, line: leg.line ?? null, decimal_odds: leg.decimal_odds ?? null }));
     $('#manual-parlay-description').value = parlay.description || ''; $('#manual-parlay-odds').value = parlay.original_decimal_odds; $('#manual-parlay-stake').value = parlay.stake; $('#manual-parlay-type').value = parlay.bet_type; $('#manual-parlay-boost').value = parlay.profit_boost_pct || ''; $('#manual-parlay-return').value = parlay.actual_total_return ?? ''; $('#manual-parlay-season').value = parlay.season ?? ''; $('#manual-parlay-week').value = parlay.week ?? ''; status.value = parlay.status; $('#manual-parlay-settlement').value = parlay.settlement_amount ?? '';
+    $('#manual-parlay-decision-source').value = parlay.decision_context?.source || ''; $('#manual-parlay-analyst').value = parlay.decision_context?.analyst || ''; $('#manual-parlay-decision-note').value = parlay.decision_context?.note || ''; syncDecisionContext();
     safetyNet.set(parlay.safety_net);
     weekHelp.textContent = parlay.week ? `Saved Week ${parlay.week}. Editing does not change it automatically.` : 'No NFL week was saved for this record.';
     $('#manual-parlay-title').textContent = 'Edit manual parlay'; $('#btn-save-manual-parlay').textContent = 'Save changes'; renderDraftLegs(); updateSettlementVisibility(); updateReturnPreview(); modal.hidden = false;
   }
 
   $('#btn-manual-parlay').addEventListener('click', () => { resetForm(); modal.hidden = false; searchLegPlayers(); });
+  $('#manual-leg-edit-cancel').addEventListener('click', () => { stopLegEdit(); $('#manual-free-text-legs').value = ''; $('#manual-leg-description').value = ''; $('#manual-leg-line').value = ''; $('#manual-leg-odds').value = ''; });
+  $('#manual-parlay-decision-source').addEventListener('change', syncDecisionContext);
   document.addEventListener('click', event => {
     const closeButton = event.target.closest('[data-close-manual-parlay]'); if (closeButton) modal.hidden = true;
     const modeButton = event.target.closest('[data-leg-mode]'); if (modeButton) setLegMode(modeButton.dataset.legMode);
-    const removeButton = event.target.closest('[data-remove-manual-leg]'); if (removeButton) { draftLegs.splice(Number(removeButton.dataset.removeManualLeg), 1); renderDraftLegs(); }
+    const legEditButton = event.target.closest('[data-edit-manual-leg]'); if (legEditButton) { editDraftLeg(Number(legEditButton.dataset.editManualLeg)); return; }
+    const removeButton = event.target.closest('[data-remove-manual-leg]'); if (removeButton) { const index = Number(removeButton.dataset.removeManualLeg); draftLegs.splice(index, 1); if (editingLegIndex === index) stopLegEdit(); else if (editingLegIndex !== null && editingLegIndex > index) editingLegIndex -= 1; renderDraftLegs(); }
     const editButton = event.target.closest('[data-manual-parlay-edit]'); if (!editButton) return;
     const parlay = (window.proplensTrackedParlays || []).find(item => item.id === editButton.dataset.manualParlayEdit); if (parlay) openForEdit(parlay);
   });

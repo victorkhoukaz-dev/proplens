@@ -41,6 +41,31 @@ def test_tracked_parlay_retains_legs_and_boosted_win_return(tmp_path, monkeypatc
     assert settled.json()["parlay"]["profit"] == 20.0
 
 
+def test_evaluated_parlay_title_and_decision_context_can_be_corrected(tmp_path, monkeypatch):
+    monkeypatch.setattr(parlay_tracker_store, "path", tmp_path / "tracked_parlays.json")
+    client = TestClient(app)
+    created = client.post("/api/tracker/parlays", json=payload(
+        description="  Sunday TD mix  ",
+        decision_context={"source": "analyst", "analyst": "Chris Wecht"},
+    ))
+    assert created.status_code == 200
+    parlay = created.json()["parlay"]
+    assert parlay["description"] == "Sunday TD mix"
+    assert parlay["decision_context"]["analyst"] == "Chris Wecht"
+
+    updated = client.put(f"/api/tracker/parlays/{parlay['id']}", json={
+        "description": "  New title  ", "decision_context": {"source": "model"},
+        "bet_type": "cash", "stake": 4, "original_decimal_odds": 5,
+        "effective_decimal_odds": 6, "status": "pending",
+    })
+    assert updated.status_code == 200
+    assert updated.json()["parlay"]["description"] == "New title"
+    assert updated.json()["parlay"]["decision_context"] == {"source": "model"}
+
+    invalid = client.post("/api/tracker/parlays", json=payload(decision_context={"source": "analyst"}))
+    assert invalid.status_code == 422
+
+
 def test_bonus_parlay_loss_and_adjusted_cash_payouts(tmp_path, monkeypatch):
     monkeypatch.setattr(parlay_tracker_store, "path", tmp_path / "tracked_parlays.json")
     client = TestClient(app)

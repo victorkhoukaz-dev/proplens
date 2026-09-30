@@ -90,7 +90,7 @@ def test_research_excludes_missing_or_ambiguous_final_player_stats(monkeypatch):
     report = model_research_service.report(season=2026, through_week=2)
 
     assert report["coverage"]["matched_rows"] == 0
-    assert report["coverage"]["excluded"] == {"player_stat_missing_or_ambiguous": 1}
+    assert report["coverage"]["excluded"] == {"no_player_stat_record": 1}
     assert report["markets"] == []
 
 
@@ -142,3 +142,26 @@ def test_research_keeps_injury_rows_in_all_outcomes_but_excludes_them_from_adjus
     assert report["availability_adjusted"]["excluded_verified_in_game_injuries"] == 1
     assert report["availability_adjusted"]["markets"] == []
     assert report["records"][0]["availability_note"] == "Left early"
+
+
+def test_coverage_exposes_name_candidate_without_accepting_it(monkeypatch):
+    only = snapshot("Only", datetime(2026, 9, 12, 12, tzinfo=timezone.utc), 65)
+    monkeypatch.setattr(projection_snapshot_store, "list", lambda: [only])
+    monkeypatch.setattr(model_research_service, "_schedule_content", lambda refresh: (SCHEDULE, "test", True))
+    monkeypatch.setattr(result_preview_service, "_season_content", lambda season, refresh: (STATS.replace("Saquon Barkley", "Saquon Barkly"), "test", True))
+    report = model_research_service.report(include_unmatched=True)
+    assert report["coverage"]["matched_rows"] == 0
+    row = report["unmatched_records"][0]
+    assert row["reason"] == "possible_name_mismatch"
+    assert row["stage"] == "selected"
+    assert row["candidates"][0]["actual_stat"] == 72
+
+
+def test_coverage_distinguishes_duplicate_exact_matches(monkeypatch):
+    only = snapshot("Only", datetime(2026, 9, 12, 12, tzinfo=timezone.utc), 65)
+    monkeypatch.setattr(projection_snapshot_store, "list", lambda: [only])
+    monkeypatch.setattr(model_research_service, "_schedule_content", lambda refresh: (SCHEDULE, "test", True))
+    monkeypatch.setattr(result_preview_service, "_season_content", lambda season, refresh: (STATS + STATS.splitlines()[-1] + "\n", "test", True))
+    report = model_research_service.report(include_unmatched=True)
+    assert report["coverage"]["matched_rows"] == 0
+    assert report["unmatched_records"][0]["reason"] == "multiple_exact_stat_matches"

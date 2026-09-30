@@ -145,7 +145,8 @@ def test_preview_anytime_td_never_infers_a_loss_from_no_offensive_td(monkeypatch
 
     proposal = report["proposals"][0]
     assert proposal["status"] == "player_review"
-    assert "Do not infer a loss" in proposal["message"]
+    assert proposal["manual_loss_confirmation"] is True
+    assert "Check the Bet365 result" in proposal["message"]
 
 
 def test_preview_allows_a_fully_identified_manual_standard_prop(monkeypatch):

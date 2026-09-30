@@ -3,7 +3,7 @@
   const $ = selector => document.querySelector(selector);
   const modal = $('#research-modal'), report = $('#research-report'), run = $('#btn-run-research');
   const drilldown = $('#research-drilldown-modal');
-  const state = { market: '', rows: [], selected: null };
+  const state = { market: '', rows: [], selected: null, report: null };
   const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '>': '&gt;', '<': '&lt;', "'": '&#39;', '"': '&quot;' }[char]));
   const number = value => Number(value || 0).toLocaleString();
   const signed = value => `${Number(value) >= 0 ? '+' : ''}${Number(value).toFixed(2)}`;
@@ -25,15 +25,23 @@
   }
   function render(data) {
     const coverage = data.coverage || {}, exclusions = Object.entries(coverage.excluded || {});
+    const summaryView = $('#research-summary-view').value;
+    const adjusted = summaryView === 'availability_adjusted';
+    const marketRows = adjusted ? (data.availability_adjusted?.markets || []) : (data.markets || []);
+    const excludedInjuries = Number(data.availability_adjusted?.excluded_verified_in_game_injuries || 0);
+    $('#research-summary-view-help').textContent = adjusted
+      ? `Availability-adjusted excludes ${excludedInjuries} verified in-game injury ${excludedInjuries === 1 ? 'row' : 'rows'} from each market's accuracy metrics.`
+      : 'All outcomes includes every matched player-game. Coverage cards always remain raw data-quality counts.';
     const coverageCards = `<section class="research-coverage"><div><span>Supported imports</span><strong>${number(coverage.supported_imported_rows)}</strong></div><div><span>Selected pre-kickoff</span><strong>${number(coverage.selected_pre_kickoff_rows)}</strong></div><div><span>Matched final stats</span><strong>${number(coverage.matched_rows)}</strong></div></section>`;
     const exclusionHtml = exclusions.length ? `<section class="research-exclusions"><strong>Excluded safely</strong>${exclusions.map(([reason, count]) => `<span>${escapeHtml(label(reason))}: ${number(count)}</span>`).join('')}</section>` : '';
-    const metrics = data.markets?.length ? `<section class="research-market-table"><div class="research-market-heading"><span>Market</span><span>N</span><span>Proj.</span><span>Actual</span><span>Bias</span><span>MAE</span><span>RMSE</span></div>${data.markets.map(item => `<button class="research-market-row" type="button" data-market="${escapeHtml(item.market)}" title="Open player-level detail"><strong>${escapeHtml(item.label)}</strong><span>${item.sample_size}</span><span>${item.average_projection.toFixed(2)}</span><span>${item.average_actual.toFixed(2)}</span><span class="${item.bias_actual_minus_projection >= 0 ? 'positive' : 'negative'}">${signed(item.bias_actual_minus_projection)}</span><span>${item.mae.toFixed(2)}</span><span>${item.rmse.toFixed(2)}</span></button>`).join('')}</section>` : '<p class="field-help">No safely matched final statistics are available in this scope yet.</p>';
-    const largest = data.largest_errors?.length ? `<section class="research-largest"><strong>Largest absolute errors — examples only</strong>${data.largest_errors.slice(0, 5).map(item => `<button type="button" data-market="${escapeHtml(item.market)}"><span>${escapeHtml(item.player_name)} · ${escapeHtml(label(item.market))}</span><span>${item.projection_mean.toFixed(1)} projected · ${item.actual_stat.toFixed(1)} actual · ${signed(item.error)}</span></button>`).join('')}</section>` : '';
-    report.innerHTML = `${coverageCards}<p class="research-note">${escapeHtml(data.message || 'Descriptive only.')}</p>${exclusionHtml}${metrics}${largest}`;
+    const metrics = marketRows.length ? `<section class="research-market-table"><div class="research-market-heading"><span>Market</span><span>N</span><span>Proj.</span><span>Actual</span><span>Bias</span><span>MAE</span><span>RMSE</span></div>${marketRows.map(item => `<button class="research-market-row" type="button" data-market="${escapeHtml(item.market)}" title="Open player-level detail"><strong>${escapeHtml(item.label)}</strong><span>${item.sample_size}</span><span>${item.average_projection.toFixed(2)}</span><span>${item.average_actual.toFixed(2)}</span><span class="${item.bias_actual_minus_projection >= 0 ? 'positive' : 'negative'}">${signed(item.bias_actual_minus_projection)}</span><span>${item.mae.toFixed(2)}</span><span>${item.rmse.toFixed(2)}</span></button>`).join('')}</section>` : '<p class="field-help">No safely matched final statistics are available in this view yet.</p>';
+    const errorExamples = adjusted ? (data.largest_errors || []).filter(item => !item.availability_adjusted_excluded) : (data.largest_errors || []);
+    const largest = errorExamples.length ? `<section class="research-largest"><strong>Largest absolute errors — examples only</strong>${errorExamples.slice(0, 5).map(item => `<button type="button" data-market="${escapeHtml(item.market)}"><span>${escapeHtml(item.player_name)} · ${escapeHtml(label(item.market))}</span><span>${item.projection_mean.toFixed(1)} projected · ${item.actual_stat.toFixed(1)} actual · ${signed(item.error)}</span></button>`).join('')}</section>` : '';
+    report.innerHTML = `${coverageCards}<p class="research-note">${escapeHtml(data.message || 'Descriptive only.')}</p>${exclusionHtml}<button type="button" class="research-review-button" id="btn-review-unmatched">Review unmatched rows</button>${metrics}${largest}`;
   }
   async function load() {
     run.disabled = true; run.textContent = 'Running…'; report.innerHTML = '<p class="field-help">Matching saved snapshots to the NFL schedule and final stats…</p>';
-    try { render(await api(`/api/research/mean-accuracy?${queryParams().toString()}`)); }
+    try { state.report = await api(`/api/research/mean-accuracy?${queryParams().toString()}`); render(state.report); }
     catch (error) { report.innerHTML = `<p class="field-help">${escapeHtml(error.message)}</p>`; }
     finally { run.disabled = false; run.textContent = 'Run report'; }
   }
@@ -108,6 +116,7 @@
 
   $('#btn-open-research').addEventListener('click', () => { modal.hidden = false; });
   run.addEventListener('click', load);
+  $('#research-summary-view').addEventListener('change', () => { if (state.report) render(state.report); });
   report.addEventListener('click', event => { const button = event.target.closest('[data-market]'); if (button) openDrilldown(button.dataset.market); });
   $('#research-drilldown-table').addEventListener('click', event => { const button = event.target.closest('[data-record-id]'); if (button) selectForReview(button.dataset.recordId); });
   ['#research-drilldown-player', '#research-drilldown-team', '#research-drilldown-week', '#research-drilldown-view', '#research-drilldown-sort'].forEach(selector => {

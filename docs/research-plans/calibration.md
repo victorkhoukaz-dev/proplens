@@ -55,6 +55,8 @@ Initial reports group by market. Position splits should wait until each subgroup
 
 ## Phase 5.2 — Probability calibration
 
+Coverage review is available in Model research via **Review unmatched rows**. It separates selected-row stat failures from import-stage exclusions, with player/week/market/reason filters and candidate records for manual inspection. Similar names never become accepted matches automatically. The first Weeks 1–3 audit is recorded in [through-week-03-coverage-audit.md](../../research/2026/calibration/data-quality/through-week-03-coverage-audit.md); participation verification is the next investigation before changing any missing-stat treatment.
+
 Keep these populations separate:
 
 1. All imported projections: projection-mean accuracy.

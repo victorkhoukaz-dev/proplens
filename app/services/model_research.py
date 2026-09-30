@@ -9,6 +9,7 @@ import urllib.error
 import urllib.request
 from collections import Counter, defaultdict
 from datetime import datetime
+from difflib import SequenceMatcher
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -91,7 +92,8 @@ class ModelResearchService:
                 continue
             if (raw.get("game_type") or "REG").upper() != "REG":
                 continue
-            rows.append({"season": season, "week": week, "home": home, "away": away, "kickoff": kickoff})
+            rows.append({"season": season, "week": week, "home": home, "away": away, "kickoff": kickoff,
+                         "completed": _as_int(raw.get("home_score")) is not None and _as_int(raw.get("away_score")) is not None})
         return rows
 
     @staticmethod
@@ -146,7 +148,7 @@ class ModelResearchService:
             })
         return market_rows
 
-    def report(self, *, season: int | None = None, through_week: int | None = None, refresh: bool = False, include_records: bool = False) -> dict[str, Any]:
+    def report(self, *, season: int | None = None, through_week: int | None = None, refresh: bool = False, include_records: bool = False, include_unmatched: bool = False) -> dict[str, Any]:
         snapshots = projection_snapshot_store.list()
         imported = self._snapshot_rows(snapshots, season, through_week)
         if not imported:
@@ -174,23 +176,36 @@ class ModelResearchService:
             schedule_index[(game["season"], game["week"], frozenset((game["home"], game["away"])))].append(game)
 
         excluded: Counter[str] = Counter()
+        unmatched: list[dict[str, Any]] = []
+
+        def reject(row: dict[str, Any], reason: str, stage: str, candidates: list[dict[str, Any]] | None = None) -> None:
+            excluded[reason] += 1
+            if include_unmatched:
+                unmatched.append({
+                    **{key: row[key] for key in ("season", "week", "player_name", "team", "opponent", "position", "market", "projection_mean")},
+                    "snapshot_id": row["snapshot"].id, "snapshot_label": row["snapshot"].label,
+                    "snapshot_imported_at": row["snapshot"].imported_at.isoformat(),
+                    "reason": reason, "stage": stage, "candidates": candidates or [],
+                    "game_completed": row.get("game_completed", False),
+                })
         selected: dict[tuple[Any, ...], dict[str, Any]] = {}
         for row in imported:
             if not row["team"] or not row["opponent"] or not row["player_key"]:
-                excluded["missing_projection_identity"] += 1
+                reject(row, "missing_projection_identity", "import")
                 continue
             games = schedule_index.get((row["season"], row["week"], frozenset((row["team"], row["opponent"]))), [])
             if len(games) != 1:
-                excluded["schedule_unavailable_or_ambiguous"] += 1
+                reject(row, "schedule_unavailable_or_ambiguous", "import")
                 continue
             game = games[0]
             imported_at = row["snapshot"].imported_at
             if imported_at.tzinfo is None:
                 imported_at = imported_at.replace(tzinfo=EASTERN)
             if imported_at >= game["kickoff"]:
-                excluded["imported_after_kickoff"] += 1
+                reject(row, "imported_after_kickoff", "import")
                 continue
             row["kickoff"] = game["kickoff"]
+            row["game_completed"] = game["completed"]
             key = (row["season"], row["week"], row["team"], row["opponent"], row["player_key"], row["market"])
             existing = selected.get(key)
             if existing is None or row["snapshot"].imported_at > existing["snapshot"].imported_at:
@@ -215,15 +230,27 @@ class ModelResearchService:
         matched: list[dict[str, Any]] = []
         for row in selected.values():
             if row["season"] in stat_errors:
-                excluded["player_stats_unavailable"] += 1
+                reject(row, "player_stats_unavailable", "selected")
                 continue
             matches = stats_index.get((row["season"], row["week"], row["team"], row["opponent"], row["player_key"]), [])
-            if len(matches) != 1:
-                excluded["player_stat_missing_or_ambiguous"] += 1
+            if not matches:
+                same_week = [item for item in stat_rows if item["season"] == row["season"] and item["week"] == row["week"]]
+                exact_name = [item for item in same_week if item["player_key"] == row["player_key"]]
+                same_game = [item for item in same_week if item["team"] == row["team"] and item["opponent"] == row["opponent"]]
+                possible_names = sorted(
+                    [item for item in same_game if SequenceMatcher(None, item["player_key"], row["player_key"]).ratio() >= 0.72],
+                    key=lambda item: SequenceMatcher(None, item["player_key"], row["player_key"]).ratio(), reverse=True,
+                )[:3]
+                reason = "player_context_mismatch" if exact_name else "possible_name_mismatch" if possible_names else "no_player_stat_record" if same_game else "no_game_stat_records"
+                candidates = [{"player_key": item["player_key"], "team": item["team"], "opponent": item["opponent"], "actual_stat": item["stats"].get(row["market"])} for item in (exact_name or possible_names)[:3]]
+                reject(row, reason, "selected", candidates)
+                continue
+            if len(matches) > 1:
+                reject(row, "multiple_exact_stat_matches", "selected", [{"player_key": item["player_key"], "team": item["team"], "opponent": item["opponent"], "actual_stat": item["stats"].get(row["market"])} for item in matches[:3]])
                 continue
             actual = matches[0]["stats"].get(row["market"])
             if actual is None:
-                excluded["final_stat_unavailable"] += 1
+                reject(row, "final_stat_unavailable", "selected")
                 continue
             error = float(actual) - row["projection_mean"]
             matched.append({
@@ -252,6 +279,7 @@ class ModelResearchService:
         return {
             "success": True,
             **({"records": matched} if include_records else {}),
+            **({"unmatched_records": unmatched} if include_unmatched else {}),
             "scope": {"season": season, "through_week": through_week},
             "coverage": {
                 "supported_imported_rows": len(imported),

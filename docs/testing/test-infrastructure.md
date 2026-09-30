@@ -9,7 +9,7 @@
 
 ## 1. Executive Summary & Test Infrastructure Overview
 
-The NFL +EV Betting Application E2E Test Suite provides comprehensive, opaque-box, requirement-driven automated verification spanning Requirements R1 through R5 as specified in `ORIGINAL_REQUEST.md` and `PROJECT.md`.
+The NFL +EV Betting Application E2E Test Suite provides comprehensive, opaque-box, requirement-driven automated verification spanning Requirements R1 through R5 as specified in [original-request.md](../reference/original-request.md) and [PROJECT.md](../../PROJECT.md).
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐

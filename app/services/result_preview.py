@@ -154,7 +154,7 @@ class ResultPreviewService:
                     "stat_label": "offensive rushing/receiving TDs",
                     "message": "Preview only — a rushing or receiving touchdown proves this Anytime TD selection won.",
                 }
-            return {**base, "status": "player_review", "message": "No rushing or receiving touchdown was found. Do not infer a loss: review Bet365 settlement for return or recovery touchdown exceptions."}
+            return {**base, "status": "player_review", "manual_loss_confirmation": True, "message": "No offensive touchdown was found. Check the Bet365 result before confirming a loss: a return or recovery touchdown may still count."}
         _, label = SUPPORTED_MARKETS[bet["market"]]
         actual = matches[0]["stats"].get(bet["market"])
         if actual is None:

@@ -1,5 +1,7 @@
 # Local odds files, projection imports, settings, and runtime state
 data/
+# Season-specific research reports remain local-only (may contain betting history).
+research/20*/
 bestbets.json
 .agents/
 

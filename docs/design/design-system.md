@@ -1,6 +1,6 @@
 # PropLens Design System
 
-> **Scope and source of truth.** This is a documentation-only record of the UI that is currently implemented in this repository. It describes the rendered PropLens manual NFL prop evaluator, not the broader betting-domain logic. The canonical implementation is [`static/index.html`](static/index.html), [`static/styles.css`](static/styles.css), [`static/app.js`](static/app.js), and [`static/phase11.js`](static/phase11.js), served by [`app/main.py`](app/main.py). Values below are implementation values, not a proposed replacement design system.
+> **Scope and source of truth.** This is a documentation-only record of the UI that is currently implemented in this repository. It describes the rendered PropLens manual NFL prop evaluator, not the broader betting-domain logic. The canonical implementation is [`static/index.html`](../../static/index.html), [`static/styles.css`](../../static/styles.css), [`static/app.js`](../../static/app.js), and [`static/phase11.js`](../../static/phase11.js), served by [`app/main.py`](../../app/main.py). Values below are implementation values, not a proposed replacement design system.
 
 ## 1. Overall Design Philosophy
 
@@ -19,7 +19,7 @@ The patterns work together because the wide, quiet page gives the headline and c
 
 ### Implemented CSS custom properties
 
-The global token set is intentionally small and appears in [`static/styles.css`](static/styles.css):
+The global token set is intentionally small and appears in [`static/styles.css`](../../static/styles.css):
 
 ```css
 :root {

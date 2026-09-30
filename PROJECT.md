@@ -1,5 +1,15 @@
 # Project: NFL +EV Betting Application (Bet365 Canada vs. Sharp Devig & FantasyPoints)
 
+## Start here
+
+- [Product roadmap](PLAN.md)
+- [Research home: calibration, betting process, and SGP](research/README.md)
+- [Design system](docs/design/design-system.md)
+- [Test infrastructure](docs/testing/test-infrastructure.md)
+- [Original request](docs/reference/original-request.md)
+
+The architecture inventory below is a historical project specification, not a current status dashboard. Research plans live in `docs/research-plans/`; readable season reports live in `research/`. Saved app data and research caches remain in `data/`.
+
 ## Architecture
 
 The NFL +EV Betting Application is designed with a clean decoupled architecture separating pure domain logic, statistical modeling, data normalization, state caching, background polling, and FastAPI presentation:
@@ -232,5 +242,5 @@ c:/Users/victo/OneDrive/Desktop/Betting app/
 ├── requirements.txt
 ├── run.py
 ├── PROJECT.md
-└── ORIGINAL_REQUEST.md
+└── docs/reference/original-request.md
 ```
