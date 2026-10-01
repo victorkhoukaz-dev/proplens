@@ -99,12 +99,15 @@ class BetTrackerStore:
         settlement_amount: float | None = None,
         *,
         evidence: dict[str, Any] | None = None,
+        expected_record: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         with self._lock:
             bets = self._read()
             for bet in bets:
                 if bet["id"] != bet_id:
                     continue
+                if expected_record is not None and bet != expected_record:
+                    raise ValueError("This bet changed during the result check. Check it again before settling.")
                 profit = self._profit(bet, status, settlement_amount)
                 settled_at = datetime.now(timezone.utc).isoformat()
                 history = list(bet.get("settlement_history") or [])
@@ -113,7 +116,7 @@ class BetTrackerStore:
                         "at": settled_at,
                         "status": status,
                         "settlement_amount": settlement_amount,
-                        "source": "result_preview" if evidence else "manual",
+                        "source": "automatic_result_check" if evidence and evidence.get("mode") == "automatic" else "result_preview" if evidence else "manual",
                         "evidence": evidence,
                     }
                 )
@@ -137,6 +140,14 @@ class BetTrackerStore:
             for bet in bets:
                 if bet["id"] != bet_id:
                     continue
+                corrected = {key: value for key, value in changes.items()
+                             if key in {"status", "line", "side_label", "market", "result_identity", "stake", "decimal_odds", "bet_type", "settlement_amount"}
+                             and bet.get(key) != value}
+                if corrected and (bet.get("settlement_evidence") or {}).get("mode") == "automatic":
+                    bet["settlement_evidence"] = None
+                    history = list(bet.get("settlement_history") or [])
+                    history.append({"at": datetime.now(timezone.utc).isoformat(), "source": "manual_correction", "changes": corrected})
+                    bet["settlement_history"] = history
                 bet.update(changes)
                 if bet["status"] == "pending":
                     bet.update({"profit": None, "settlement_amount": None, "settled_at": None})

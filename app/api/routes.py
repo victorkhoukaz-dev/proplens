@@ -57,6 +57,8 @@ from app.schemas.odds import (
 )
 from app.services.ev_pipeline import pipeline_service
 from app.services.screenshot_ocr import ScreenshotOCRError, SUPPORTED_MARKETS as SCREENSHOT_MARKETS, extract_screenshot
+from app.services.parlay_ticket_ocr import parse_parlay_ticket
+from app.services.automatic_results import settle_eligible
 from app.services.threshold_board import ANYTIME_TD_MARKET, THRESHOLD_MARKETS, anytime_td_watch_for_projection, thresholds_for_projection
 
 logger = logging.getLogger(__name__)
@@ -230,6 +232,21 @@ async def extract_screenshot_batch(
         "screenshots": screenshots,
         "row_count": len(rows),
         "notice": "Review every row before later evaluation. Screenshots and extracted rows were not saved.",
+    }
+
+
+@router.post("/parlay-screenshots/extract")
+async def extract_parlay_screenshot(file: UploadFile = File(...)) -> dict[str, Any]:
+    """Read one ticket locally and return an unsaved, review-required draft."""
+    try:
+        screenshot = extract_screenshot(await file.read(), file.filename or "ticket.png")
+    except ScreenshotOCRError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "success": True,
+        "draft": parse_parlay_ticket(screenshot["raw_text"]),
+        "raw_text": screenshot["raw_text"],
+        "notice": "Nothing was saved. Check every leg, combined odds, stake, and cash or bonus type against the ticket.",
     }
 
 
@@ -1422,6 +1439,8 @@ def browse_evaluator_players(
 
     games: dict[str, str] = {}
     for projection in projections:
+        if projection.stat_category not in EVALUATOR_MARKETS:
+            continue
         game_key = projection_game_key(projection)
         if game_key and game_key not in games:
             games[game_key] = f"{projection.team.upper()} vs {projection.opponent.upper()}"
@@ -1508,6 +1527,8 @@ def projection_threshold_board(
     projections = cache.get_projections()
     games: dict[str, str] = {}
     for projection in projections:
+        if projection.stat_category not in THRESHOLD_MARKETS and projection.stat_category != ANYTIME_TD_MARKET:
+            continue
         key = game_key(projection)
         if key:
             games.setdefault(key, f"{projection.team.upper()} vs {projection.opponent.upper()}")
@@ -1777,6 +1798,28 @@ def preview_all_tracked_results() -> dict[str, Any]:
     except Exception as exc:
         logger.warning("Combined result preview could not complete: %s", exc)
         raise HTTPException(status_code=502, detail="Could not check nflverse results right now. Your tracked bets and parlays were not changed.") from exc
+
+
+class ResultCheckRequest(BaseModel):
+    auto_settle: bool = False
+
+
+@router.post("/tracker/results/check")
+def check_tracked_results(payload: ResultCheckRequest) -> dict[str, Any]:
+    """Only this explicitly opted-in workflow can automatically settle straights."""
+    bets = bet_tracker_store.list()
+    # Complete all provider checks before writing any settlement.
+    report = preview_all_tracked_results()
+    if not payload.auto_settle:
+        return report
+    automatic = settle_eligible(bets, report)
+    settled_ids = {item["bet_id"] for item in automatic["settled"]}
+    skipped = {item["bet_id"]: item["reason"] for item in automatic["skipped"]}
+    report["proposals"] = [item for item in report["proposals"] if item["bet_id"] not in settled_ids]
+    for item in report["proposals"]:
+        if item["bet_id"] in skipped:
+            item["auto_review_reason"] = skipped[item["bet_id"]]
+    return {**report, "preview_only": not bool(settled_ids), "automatic": automatic}
 
 
 @router.post("/tracker/bets/{bet_id}/confirm-result-preview")

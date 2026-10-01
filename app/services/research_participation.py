@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.core.normalizer import PlayerNameNormalizer, TeamNormalizer
+from app.services.research_receiving_recovery import BOXSCORES_PATH, ReviewedReceivingRecovery
 
 ROOT = Path(__file__).resolve().parents[2]
 EVIDENCE_PATH = Path(__file__).with_name("research_participation_evidence.json")
@@ -25,9 +26,10 @@ def identity(row):
 
 
 class ResearchParticipationService:
-    def __init__(self, cache_dir=None, evidence_path=EVIDENCE_PATH):
+    def __init__(self, cache_dir=None, evidence_path=EVIDENCE_PATH, boxscores_path=BOXSCORES_PATH):
         self.cache_dir = Path(cache_dir) if cache_dir else ROOT / "data" / "research" / "participation_cache"
         self.evidence_path = Path(evidence_path)
+        self.boxscores_path = Path(boxscores_path)
 
     def _snap_content(self, season, refresh=False):
         path = self.cache_dir / f"snap_counts_{season}.json"
@@ -67,7 +69,8 @@ class ResearchParticipationService:
         for item in evidence:
             verified[identity(item)].append(item)
         snaps = defaultdict(list)
-        sources, warnings = [], []
+        receiving = ReviewedReceivingRecovery(self.boxscores_path)
+        sources, warnings = [], list(receiving.warnings)
         for season in sorted({row["season"] for row in records if row["stage"] == "selected"}):
             try:
                 source = self._snap_content(season, refresh)
@@ -111,6 +114,18 @@ class ResearchParticipationService:
                         result.update(status="verified_played_zero", actual_stat=0.0, detail="Verified participation and final zero for this market. Preview only; not included in main metrics.")
                     elif played and not row.get("game_completed"):
                         result["detail"] = "Participation found, but final game completion is not verified; unresolved."
+                if (played and row.get('game_completed') and row['reason'] == 'no_player_stat_record'
+                        and len(facts) <= 1 and not (fact and fact['classification'] == 'inactive')):
+                    recovery = receiving.check(row)
+                    if recovery and recovery['verified_zero']:
+                        result.update(status='verified_played_zero', actual_stat=0.0,
+                                      detail=recovery['detail'], method='reviewed_receiving_table',
+                                      reviewed_at=recovery['reviewed_at'])
+                        result['sources'] = list(dict.fromkeys(result['sources'] + [recovery['source_url']]))
+                    elif recovery:
+                        # A contradictory or ambiguous table must not be overridden by a zero flag.
+                        result.update(status='unresolved', detail=recovery['detail'])
+                        result.pop('actual_stat', None)
             enriched.append({**row, "participation_preview": result})
         selected = [row for row in enriched if row["stage"] == "selected"]
         counts = dict(Counter(row["participation_preview"]["status"] for row in selected))
@@ -118,7 +133,8 @@ class ResearchParticipationService:
         for row in selected:
             game_statuses[identity(row)].add(row["participation_preview"]["status"])
         game_counts = dict(Counter("verified_nonparticipant" if "verified_nonparticipant" in states else "verified_played_zero" if "verified_played_zero" in states else "unresolved" for states in game_statuses.values()))
-        return {"records": enriched, "participation": {"row_counts": counts, "player_game_counts": game_counts, "sources": sources, "warnings": warnings, "preview_only": True}}
+        recovery_counts = dict(Counter(row['participation_preview'].get('method', 'individual_review') for row in selected if row['participation_preview']['status'] == 'verified_played_zero'))
+        return {"records": enriched, "participation": {"row_counts": counts, "player_game_counts": game_counts, "zero_verification_methods": recovery_counts, "sources": sources, "warnings": warnings, "preview_only": True}}
 
 
 research_participation_service = ResearchParticipationService()

@@ -113,6 +113,10 @@ class ResultPreviewService:
                     "team": TeamNormalizer.canonical_team(raw.get("team") or ""),
                     "opponent": TeamNormalizer.canonical_team(raw.get("opponent_team") or ""),
                     "stats": stats,
+                    "participation_confirmed": any(
+                        (_number(raw.get(field)) or 0) > 0
+                        for field in ("attempts", "passing_attempts", "carries", "targets", "receptions")
+                    ),
                 }
             )
         return rows
@@ -166,6 +170,7 @@ class ResultPreviewService:
             "status": "proposal",
             "proposed_result": proposed,
             "actual_stat": actual,
+            "participation_confirmed": matches[0].get("participation_confirmed", False),
             "stat_label": label,
             "message": "Preview only — confirm it against Bet365 before recording the result.",
         }

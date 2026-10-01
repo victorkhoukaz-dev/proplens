@@ -14,6 +14,17 @@
     trackerSort.insertAdjacentElement('afterend', select);
     return select;
   })();
+  trackerIncludePending.closest('label').remove();
+  const trackerViewTools = document.createElement('div');
+  trackerViewTools.className = 'tracker-view-tools';
+  trackerViewTools.setAttribute('aria-label', 'Tracker display options');
+  trackerVisibleCount.before(trackerViewTools);
+  const resultCheckTools = document.createElement('div');
+  resultCheckTools.className = 'tracker-result-tools';
+  checkResults.before(resultCheckTools);
+  resultCheckTools.append(checkResults);
+  checkResults.insertAdjacentHTML('afterend', '<label class="tracker-auto-option" title="Applies to all pending offensive straight bets on half-point lines, not just the filtered view. Requires fresh stats and completed-game evidence. TDs, defensive bets and parlays stay manual."><input type="checkbox" id="tracker-auto-results"> Auto-settle eligible straights</label>');
+  const automaticResults = $('#tracker-auto-results');
   const trackerMarketFilter = (() => {
     const select = document.createElement('select');
     select.id = 'tracker-market-filter';
@@ -67,7 +78,7 @@
     button.className = 'tracker-check-results';
     button.textContent = 'Expand all parlays';
     button.hidden = true;
-    checkResults.insertAdjacentElement('beforebegin', button);
+    trackerViewTools.append(button);
     return button;
   })();
   const analyzePendingButton = (() => {
@@ -76,11 +87,11 @@
     button.id = 'btn-analyze-pending';
     button.className = 'tracker-check-results';
     button.textContent = 'Analyze pending bets';
-    checkResults.insertAdjacentElement('beforebegin', button);
+    resultCheckTools.before(button);
     return button;
   })();
   const trackerShowEvaluations = (() => {
-    const options = trackerIncludePending.closest('.tracker-summary-options');
+    const options = trackerViewTools;
     const label = document.createElement('label');
     label.innerHTML = '<input type="checkbox"> Show saved evaluations in rows';
     options.prepend(label);
@@ -204,7 +215,7 @@
   }
   function summarizeActivity(activity) {
     const settled = activity.filter(item => item.status !== 'pending');
-    const wagered = trackerIncludePending.checked ? activity : settled;
+    const wagered = activity;
     const cashWagered = wagered.filter(item => item.bet_type === 'cash' && item.status !== 'cancelled');
     const cashSettled = settled.filter(item => item.bet_type === 'cash' && item.status !== 'cancelled');
     const bonusSettled = settled.filter(item => item.bet_type === 'bonus' && item.status !== 'cancelled');
@@ -328,7 +339,7 @@
   function confirmedEvidenceMarkup(bet) {
     const evidence = bet.settlement_evidence;
     if (!evidence || evidence.source !== 'nflverse' || evidence.actual_stat === undefined) return '';
-    return `<small class="inline-suggestion confirmed-evidence">Confirmed: nflverse · ${evidence.actual_stat} ${escapeHtml(evidence.stat_label)}</small>`;
+    return `<small class="inline-suggestion confirmed-evidence">${evidence.mode === 'automatic' ? 'Auto-settled' : 'Confirmed'}: nflverse · ${evidence.actual_stat} ${escapeHtml(evidence.stat_label)}</small>`;
   }
   function compactEvaluationMarkup(bet) {
     if (!trackerShowEvaluations.checked) return '';
@@ -489,7 +500,7 @@
     const outcomeClass = proposed || (item.status === 'game_not_final' || item.status === 'stats_unavailable' ? 'waiting' : 'review');
     const line = item.line === null || item.line === undefined ? '' : ` ${item.line}`;
     const confirmLoss = item.manual_loss_confirmation && item.bet_id ? `<button type="button" class="result-preview-confirm-loss" data-confirm-td-loss="${escapeHtml(item.bet_id)}">Confirm lost on Bet365</button>` : '';
-    return `<div class="result-preview-row"><div><strong>${escapeHtml(item.player_name)} · ${escapeHtml(marketLabel(item.market))}${line}</strong><small>${actual}</small></div><div class="result-preview-decision"><span class="result-preview-outcome ${outcomeClass}">${outcome}</span>${confirmLoss}</div></div>`;
+    return `<div class="result-preview-row"><div><strong>${escapeHtml(item.player_name)} · ${escapeHtml(marketLabel(item.market))}${line}</strong><small>${actual}</small>${item.auto_review_reason ? `<small>${escapeHtml(item.auto_review_reason)}</small>` : ''}</div><div class="result-preview-decision"><span class="result-preview-outcome ${outcomeClass}">${outcome}</span>${confirmLoss}</div></div>`;
   }
   function parlayPreviewMarkup(parlay) {
     const suggestion = parlay.proposed_result ? `Suggest ${parlay.proposed_result[0].toUpperCase()}${parlay.proposed_result.slice(1)}` : parlay.status === 'waiting' ? 'Waiting for stats' : parlay.status === 'push_review' ? 'Push review' : 'Needs review';
@@ -505,7 +516,7 @@
     latestResultPreview = data;
     latestParlayResultPreviews = data.parlays || [];
     resultPreview.hidden = false;
-    resultPreview.querySelector('.result-preview-note').textContent = 'Check results is preview-only. Confirm an outcome against Bet365 before using a result button; the button records it in your tracker.';
+    resultPreview.querySelector('.result-preview-note').textContent = data.automatic ? 'Auto mode checked all pending bets, regardless of filters. Only eligible offensive straights were settled. Everything below still needs your review. Correct an automatic result through More → Edit (choose Pending to reopen it).' : 'Check results is preview-only. Confirm an outcome against Bet365 before using a result button; the button records it in your tracker.';
     resultPreview.classList.remove('is-collapsed');
     toggleResultPreview.textContent = 'Collapse';
     toggleResultPreview.setAttribute('aria-expanded', 'true');
@@ -516,9 +527,11 @@
     const outcomes = ['won', 'lost', 'push'].map(status => { const count = proposedItems.filter(item => item.proposed_result === status).length; return count ? `${count} ${status[0].toUpperCase() + status.slice(1)}` : ''; }).filter(Boolean).join(' · ');
     const checked = data.checked_straight === undefined ? '' : ` · ${data.checked_straight} straight bet${data.checked_straight === 1 ? '' : 's'} and ${data.checked_parlays} parlay${data.checked_parlays === 1 ? '' : 's'} checked`;
     resultPreviewSummary.textContent = `${proposed} suggestion${proposed === 1 ? '' : 's'}${outcomes ? ` · ${outcomes}` : ''}${checked}${sourceNote}`;
+    if (data.automatic) resultPreviewSummary.textContent = `${data.automatic.settled.length} auto-settled (${data.automatic.won} won, ${data.automatic.lost} lost) · ${data.proposals.length} straights remain for review · ${data.parlays?.length || 0} parlays remain manual${sourceNote}`;
     const straightSection = data.proposals.length ? `<div class="result-preview-section"><strong>Straight bets</strong>${data.proposals.map(previewMarkup).join('')}</div>` : '';
     const parlaySection = data.parlays?.length ? `<div class="result-preview-section"><strong>Parlays</strong>${data.parlays.map(parlayPreviewMarkup).join('')}</div>` : '';
-    resultPreviewList.innerHTML = straightSection || parlaySection ? `${straightSection}${parlaySection}` : '<p class="field-help">There are no pending bets or parlays to check.</p>';
+    const autoSection = data.automatic?.settled.length ? `<div class="result-preview-section"><strong>Automatically settled</strong>${data.automatic.settled.map(item => `<p class="field-help">${escapeHtml(item.player_name)} · ${escapeHtml(item.result)} · Actual ${item.actual_stat}</p>`).join('')}</div>` : '';
+    resultPreviewList.innerHTML = autoSection || straightSection || parlaySection ? `${autoSection}${straightSection}${parlaySection}` : '<p class="field-help">There are no pending bets or parlays to check.</p>';
     showingSuggestionsOnly = false;
     suggestionsOnly.hidden = !proposed;
     suggestionsOnly.classList.remove('active');
@@ -552,7 +565,7 @@
     } catch (error) { toast(error.message, true); button.disabled = false; }
   }
   async function loadTracker() {
-    const pending = trackerIncludePending.checked, parlays = trackerIncludeParlays.checked;
+    const pending = true, parlays = trackerIncludeParlays.checked;
     const [trackerData, parlayData, safetyNetData, propProtectData, manualCreditData, injuryAdjustedData] = await Promise.all([
       api(`/api/tracker/bets?include_pending=${pending}`),
       parlays ? api(`/api/tracker/parlays?include_pending=${pending}`) : Promise.resolve({ parlays: [] }),
@@ -666,7 +679,7 @@
     const button = event.currentTarget; button.disabled = true; button.textContent = 'Saving…';
     try { const saved = await api('/api/tracker/bets/evaluation-refreshes/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bet_ids: ids }) }); batchEvaluationPreviewModal.hidden = true; latestBatchEvaluationPreview = null; await loadTracker(); toast(`${saved.saved_count} projection update${saved.saved_count === 1 ? '' : 's'} saved. Original evaluations are unchanged.`); } catch (error) { toast(error.message, true); updateBatchEvaluationSaveButton(); }
   });
-  checkResults.addEventListener('click', async () => { checkResults.disabled = true; checkResults.textContent = 'Checking…'; try { const data = await api('/api/tracker/results/preview/all', { method: 'POST' }); renderResultPreview(data); refreshVisibleTracker(); toast(`Checked ${data.checked_straight} straight bet${data.checked_straight === 1 ? '' : 's'} and ${data.checked_parlays} parlay${data.checked_parlays === 1 ? '' : 's'}. No results were changed.`); } catch (error) { toast(error.message, true); } finally { checkResults.disabled = false; checkResults.textContent = 'Check results'; } });
+  checkResults.addEventListener('click', async () => { const auto = automaticResults.checked; checkResults.disabled = true; automaticResults.disabled = true; checkResults.textContent = 'Checking…'; try { const data = await api('/api/tracker/results/check', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ auto_settle: auto }) }); renderResultPreview(data); if (data.automatic?.settled.length) await loadTracker(); else refreshVisibleTracker(); toast(data.automatic ? `${data.automatic.settled.length} auto-settled: ${data.automatic.won} won, ${data.automatic.lost} lost. Remaining bets stay manual.` : `Checked ${data.checked_straight} straight bets and ${data.checked_parlays} parlays. No results were changed.`); } catch (error) { toast(error.message, true); } finally { checkResults.disabled = false; automaticResults.disabled = false; checkResults.textContent = 'Check results'; } });
   resultPreviewList.addEventListener('click', async event => {
     const button = event.target.closest('[data-confirm-td-loss]');
     if (!button) return;
@@ -674,7 +687,6 @@
   });
   toggleResultPreview.addEventListener('click', () => { const collapsed = resultPreview.classList.toggle('is-collapsed'); toggleResultPreview.textContent = collapsed ? 'Expand' : 'Collapse'; toggleResultPreview.setAttribute('aria-expanded', String(!collapsed)); });
   suggestionsOnly.addEventListener('click', () => { showingSuggestionsOnly = !showingSuggestionsOnly; suggestionsOnly.classList.toggle('active', showingSuggestionsOnly); suggestionsOnly.textContent = showingSuggestionsOnly ? 'Show all bets' : `Suggestions only (${latestResultPreview?.proposals.filter(item => item.status === 'proposal').length || 0})`; refreshVisibleTracker(); });
-  trackerIncludePending.addEventListener('change', () => loadTracker().catch(error => toast(error.message, true)));
   trackerSummary.addEventListener('click', event => {
     if (!event.target.closest('[data-add-manual-bonus-credit]')) return;
     const season = Number(trackerSeasonFilter.value), week = Number(trackerWeekFilter.value);

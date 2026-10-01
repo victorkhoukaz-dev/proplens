@@ -68,6 +68,10 @@ def test_defensive_upload_preserves_offense_and_activation(tmp_path, monkeypatch
         assert library["active_defensive_id"] == defensive.json()["snapshot"]["id"]
         assert sum(item["active"] for item in library["snapshots"]) == 2
         assert {p.stat_category.value for p in cache.get_projections()} >= {"rushing_yards", "tackles_assists"}
+        browser = client.get("/api/evaluator/browse?sort_market=rushing_yards").json()
+        assert browser["games"] == [{"key": "DAL|PHI", "label": "PHI vs DAL"}]
+        board = client.get("/api/evaluator/threshold-board?market=rushing_yards").json()
+        assert board["games"] == [{"key": "DAL|PHI", "label": "PHI vs DAL"}]
         assert client.get("/api/evaluator/players?q=saquon").json()["players"]
         assert defensive.json()["snapshot"]["positions"] == {"EDGE": 1, "DB": 1}
         newer = client.post("/api/upload/defensive-projections", data={"season": "2026", "week": "4"}, files=[

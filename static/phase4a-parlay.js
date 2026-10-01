@@ -63,6 +63,15 @@
 
   const modal = $('#manual-parlay-modal');
   const form = $('#manual-parlay-form');
+  modal.querySelector('.manual-parlay-heading').insertAdjacentHTML('afterend', `
+    <section class="ticket-import" aria-label="Import placed parlay screenshot">
+      <div><strong>Have a screenshot of the placed parlay?</strong><span>Read one ticket locally, then correct the draft below before saving.</span></div>
+      <div class="ticket-import-controls"><input id="manual-parlay-screenshot" type="file" accept="image/png,image/jpeg,image/webp" aria-label="Parlay ticket screenshot"><button type="button" id="btn-read-parlay-screenshot">Read screenshot into draft</button></div>
+      <p id="ticket-import-status" class="field-help" aria-live="polite">Nothing is saved by reading a screenshot. Individual leg odds can stay blank.</p>
+      <div id="ticket-import-review" hidden><img id="ticket-import-image" alt="Uploaded parlay screenshot for comparison"><div><strong>Check against your screenshot</strong><ul id="ticket-import-warnings"></ul><details><summary>Show text read from screenshot</summary><pre id="ticket-import-raw-text"></pre></details></div></div>
+    </section>`);
+  $('#btn-save-manual-parlay').insertAdjacentHTML('beforebegin', '<label class="ticket-import-confirm" id="ticket-import-confirm-label" hidden><input type="checkbox" id="ticket-import-confirm"> I checked every leg, combined odds, stake, and cash/bonus type against the screenshot.</label>');
+  $('#manual-parlay-type').insertAdjacentHTML('afterbegin', '<option value="">Choose cash or bonus</option>');
   const status = $('#manual-parlay-status');
   const weekHelp = $('#manual-parlay-week-help');
   const legCategory = $('#manual-leg-category');
@@ -72,6 +81,8 @@
   let editingLegIndex = null;
   let playerMatches = [];
   let playerSearchTimer = null;
+  let screenshotDraft = false;
+  let screenshotObjectUrl = null;
   const safetyNet = window.proplensSafetyNet.mount($('.manual-parlay-financials'), {stake: () => Number($('#manual-parlay-stake').value), type: () => $('#manual-parlay-type').value, changed: updateReturnPreview});
   const safetyPreview = document.createElement('div'); safetyNet.root.insertAdjacentElement('afterend', safetyPreview);
   const syncDecisionContext = () => { $('#manual-parlay-analyst-label').hidden = $('#manual-parlay-decision-source').value !== 'analyst'; };
@@ -85,7 +96,50 @@
   function applyWeekSuggestion() { const season = Number(value('#manual-parlay-season')); const stored = Number(sessionStorage.getItem(`proplens-manual-week-${season}`)); const suggested = Number.isInteger(stored) && stored >= 1 && stored <= 25 ? stored : suggestedWeekForSeason(season); $('#manual-parlay-week').value = suggested || ''; weekHelp.textContent = stored ? `Using Week ${stored}, your last choice this session.` : suggested ? `Suggested Week ${suggested} from today's NFL calendar. You can change it.` : 'Choose the week manually for this season.'; }
   function rememberWeek() { const season = Number(value('#manual-parlay-season')), week = Number(value('#manual-parlay-week')); if (!Number.isInteger(season) || !Number.isInteger(week) || week < 1 || week > 25) return; sessionStorage.setItem(`proplens-manual-week-${season}`, String(week)); weekHelp.textContent = `Week ${week} will be used for new manual bets this session.`; }
   function updateSettlementVisibility() { $('#manual-parlay-settlement-field').hidden = !['cashed_out', 'push_adjusted', 'void_adjusted'].includes(status.value); }
-  function updateReturnPreview() { safetyNet.sync(); safetyPreview.innerHTML = ''; const odds = numberOrNull('#manual-parlay-odds'), stake = numberOrNull('#manual-parlay-stake'), boost = numberOrNull('#manual-parlay-boost') || 0, actual = numberOrNull('#manual-parlay-return'); const preview = $('#manual-parlay-return-preview'), isBonus = value('#manual-parlay-type') === 'bonus'; $('#manual-parlay-return-label').firstChild.textContent = isBonus ? 'Actual cash payout ' : 'Actual total return '; if (!odds || odds <= 1 || !stake || stake <= 0) { preview.textContent = 'Enter combined odds and stake to preview the result.'; return; } const effective = 1 + (odds - 1) * (1 + boost / 100); const payout = actual ?? stake * (isBonus ? effective - 1 : effective); const label = isBonus ? 'Potential cash payout' : 'Winning total return'; preview.textContent = actual !== null ? `${isBonus ? 'Exact cash payout' : 'Exact winning total return'}: $${payout.toFixed(2)} (your override).` : `${label}: $${payout.toFixed(2)} at ${effective.toFixed(2)} effective odds.${isBonus ? ' Bonus stake is not returned.' : ''}`; try { safetyPreview.innerHTML = window.proplensSafetyNet.result(safetyNet.value(), stake, payout); } catch (error) { safetyPreview.textContent = error.message; } }
+  function updateReturnPreview() { safetyNet.sync(); safetyPreview.innerHTML = ''; const odds = numberOrNull('#manual-parlay-odds'), stake = numberOrNull('#manual-parlay-stake'), boost = numberOrNull('#manual-parlay-boost') || 0, actual = numberOrNull('#manual-parlay-return'); const preview = $('#manual-parlay-return-preview'), isBonus = value('#manual-parlay-type') === 'bonus'; $('#manual-parlay-return-label').firstChild.textContent = isBonus ? 'Actual cash payout ' : 'Actual total return '; if (!value('#manual-parlay-type')) { preview.textContent = 'Choose cash or bonus before checking the payout.'; return; } if (!odds || odds <= 1 || !stake || stake <= 0) { preview.textContent = 'Enter combined odds and stake to preview the result.'; return; } const effective = 1 + (odds - 1) * (1 + boost / 100); const payout = actual ?? stake * (isBonus ? effective - 1 : effective); const label = isBonus ? 'Potential cash payout' : 'Winning total return'; preview.textContent = actual !== null ? `${isBonus ? 'Exact cash payout' : 'Exact winning total return'}: $${payout.toFixed(2)} (your override).` : `${label}: $${payout.toFixed(2)} at ${effective.toFixed(2)} effective odds.${isBonus ? ' Bonus stake is not returned.' : ''}`; try { safetyPreview.innerHTML = window.proplensSafetyNet.result(safetyNet.value(), stake, payout); } catch (error) { safetyPreview.textContent = error.message; } }
+
+  function clearScreenshotReview() {
+    screenshotDraft = false;
+    if (screenshotObjectUrl) URL.revokeObjectURL(screenshotObjectUrl);
+    screenshotObjectUrl = null;
+    $('#manual-parlay-screenshot').value = '';
+    $('#ticket-import-image').removeAttribute('src');
+    $('#ticket-import-review').hidden = true;
+    $('#ticket-import-confirm-label').hidden = true;
+    $('#ticket-import-confirm').checked = false;
+    $('#ticket-import-status').textContent = 'Nothing is saved by reading a screenshot. Individual leg odds can stay blank.';
+  }
+
+  async function readParlayScreenshot() {
+    const file = $('#manual-parlay-screenshot').files[0];
+    if (!file) return toast('Choose one screenshot of the placed parlay.', true);
+    if (editingId || draftLegs.length || value('#manual-parlay-odds') || (value('#manual-parlay-stake') && value('#manual-parlay-stake') !== '5')) return toast('Start a new blank manual parlay before importing a screenshot.', true);
+    const button = $('#btn-read-parlay-screenshot');
+    button.disabled = true;
+    $('#ticket-import-status').textContent = 'Reading the ticket locally…';
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const result = await api('/api/parlay-screenshots/extract', { method: 'POST', body: formData });
+      const draft = result.draft;
+      draftLegs = draft.legs.slice(0, 10);
+      $('#manual-parlay-odds').value = draft.combined_odds ?? '';
+      $('#manual-parlay-stake').value = draft.stake ?? '';
+      $('#manual-parlay-type').value = draft.bet_type || '';
+      screenshotDraft = true;
+      $('#ticket-import-confirm-label').hidden = false;
+      $('#ticket-import-confirm').checked = false;
+      if (screenshotObjectUrl) URL.revokeObjectURL(screenshotObjectUrl);
+      screenshotObjectUrl = URL.createObjectURL(file);
+      $('#ticket-import-image').src = screenshotObjectUrl;
+      $('#ticket-import-warnings').innerHTML = (draft.warnings.length ? draft.warnings : ['Every extracted field still needs your review.']).map(warning => `<li>${escapeHtml(warning)}</li>`).join('');
+      $('#ticket-import-raw-text').textContent = result.raw_text || 'No readable text found.';
+      $('#ticket-import-review').hidden = false;
+      $('#ticket-import-status').textContent = `${draftLegs.length} leg${draftLegs.length === 1 ? '' : 's'} prefilled. Correct or add legs below, then confirm the ticket details before saving.`;
+      renderDraftLegs(); updateReturnPreview();
+    } catch (error) { $('#ticket-import-status').textContent = error.message; toast(error.message, true); }
+    finally { button.disabled = false; }
+  }
 
   function setLegMode(mode) {
     document.querySelectorAll('[data-leg-mode]').forEach(button => button.classList.toggle('active', button.dataset.legMode === mode));
@@ -211,7 +265,7 @@
   }
 
   function resetForm() {
-    form.reset(); safetyNet.set(null); editingId = null; draftLegs = []; stopLegEdit(); $('#manual-parlay-season').value = '2026'; status.value = 'pending'; legCategory.value = 'player_prop';
+    form.reset(); clearScreenshotReview(); safetyNet.set(null); editingId = null; draftLegs = []; stopLegEdit(); $('#manual-parlay-season').value = '2026'; $('#manual-parlay-type').value = 'cash'; status.value = 'pending'; legCategory.value = 'player_prop';
     $('#manual-leg-player-source').textContent = ''; $('#manual-leg-player-source').classList.remove('directory');
     renderLegMarkets(); setLegMode('structured'); renderDraftLegs(); applyWeekSuggestion(); updateSettlementVisibility(); updateReturnPreview();
     syncDecisionContext();
@@ -221,6 +275,8 @@
   function payload() {
     const season = numberOrNull('#manual-parlay-season'), week = numberOrNull('#manual-parlay-week'), settlement = numberOrNull('#manual-parlay-settlement');
     if (draftLegs.length < 2) throw new Error('Add at least two parlay legs.');
+    if (!value('#manual-parlay-type')) throw new Error('Choose whether this was a cash or bonus bet.');
+    if (screenshotDraft && !$('#ticket-import-confirm').checked) throw new Error('Review the screenshot and check the confirmation box before saving.');
     if ((season === null) !== (week === null)) throw new Error('Enter both season and NFL week, or leave both blank.');
     if (['cashed_out', 'push_adjusted', 'void_adjusted'].includes(status.value) && settlement === null) throw new Error('Enter the actual amount paid by Bet365.');
     const source = value('#manual-parlay-decision-source'), analyst = value('#manual-parlay-analyst'), note = value('#manual-parlay-decision-note');
@@ -229,6 +285,7 @@
   }
 
   function openForEdit(parlay) {
+    clearScreenshotReview();
     stopLegEdit();
     editingId = parlay.id;
     draftLegs = parlay.legs.map(leg => ({ entry_mode: leg.entry_mode || (leg.market === 'manual' ? 'free_text' : 'structured'), description: leg.description || leg.player_name, category: leg.category || null, player_name: leg.entry_mode === 'structured' ? leg.player_name : null, position: leg.position || leg.result_identity?.position || null, team: leg.team || null, opponent: leg.opponent || null, market: leg.market === 'manual' ? null : leg.market, side_label: leg.side_label || null, line: leg.line ?? null, decimal_odds: leg.decimal_odds ?? null }));
@@ -240,6 +297,7 @@
   }
 
   $('#btn-manual-parlay').addEventListener('click', () => { resetForm(); modal.hidden = false; searchLegPlayers(); });
+  $('#btn-read-parlay-screenshot').addEventListener('click', readParlayScreenshot);
   $('#manual-leg-edit-cancel').addEventListener('click', () => { stopLegEdit(); $('#manual-free-text-legs').value = ''; $('#manual-leg-description').value = ''; $('#manual-leg-line').value = ''; $('#manual-leg-odds').value = ''; });
   $('#manual-parlay-decision-source').addEventListener('change', syncDecisionContext);
   document.addEventListener('click', event => {
@@ -258,7 +316,7 @@
   status.addEventListener('change', updateSettlementVisibility); $('#manual-parlay-season').addEventListener('change', applyWeekSuggestion); $('#manual-parlay-week').addEventListener('change', rememberWeek);
   form.addEventListener('submit', async event => {
     event.preventDefault(); const button = $('#btn-save-manual-parlay'); button.disabled = true;
-    try { const body = payload(); const url = editingId ? `/api/tracker/parlays/${editingId}/manual` : '/api/tracker/parlays/manual'; await api(url, { method: editingId ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); modal.hidden = true; await window.proplensRefreshParlayTracker?.(); await window.proplensRefreshTracker?.(); toast(editingId ? 'Manual parlay updated.' : 'Manual parlay added to the tracker.'); }
+    try { const body = payload(); const url = editingId ? `/api/tracker/parlays/${editingId}/manual` : '/api/tracker/parlays/manual'; await api(url, { method: editingId ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); modal.hidden = true; clearScreenshotReview(); await window.proplensRefreshParlayTracker?.(); await window.proplensRefreshTracker?.(); toast(editingId ? 'Manual parlay updated.' : 'Manual parlay added to the tracker.'); }
     catch (error) { toast(error.message, true); } finally { button.disabled = false; }
   });
 })();

@@ -45,6 +45,7 @@ def test_preview_proposes_result_without_settling_or_network(monkeypatch):
             "status": "proposal",
             "proposed_result": "won",
             "actual_stat": 60.0,
+            "participation_confirmed": True,
             "stat_label": "rushing yards",
             "message": "Preview only — confirm it against Bet365 before recording the result.",
         }

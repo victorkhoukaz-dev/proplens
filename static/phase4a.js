@@ -23,6 +23,8 @@
   const syncManualDecisionContext = () => { manualAnalystLabel.hidden = $('#manual-decision-source').value !== 'analyst'; };
   const weekOneStarts = { 2026: [2026, 8, 9] };
   let editingId = null;
+  let automaticDefensiveAttribution = false;
+  let attributionManuallyChanged = false;
   let playerMatches = [];
   let searchTimer = null;
 
@@ -44,6 +46,7 @@
     custom: [['custom', 'Other / custom bet']],
   };
   const positionMarketDefaults = { QB: 'passing_yards', RB: 'rushing_yards', WR: 'receiving_yards', TE: 'receiving_yards', EDGE: 'tackles_assists', DL: 'tackles_assists', LB: 'tackles_assists', DB: 'tackles_assists' };
+  const defensiveMarkets = new Set(['tackles_assists', 'solo_tackles', 'sacks', 'defensive_interceptions', 'passes_defended', 'defensive_td']);
   window.proplensManualEntryConfig = { markets, positionMarketDefaults };
 
   const value = id => $(id).value.trim();
@@ -71,11 +74,31 @@
     playerFields.forEach(field => field.hidden = category.value !== 'player_prop');
     selectionFields.forEach(field => field.hidden = category.value === 'custom');
     if (!selected) $('#manual-side').value = category.value === 'game_bet' ? 'Home' : category.value === 'custom' ? 'Other' : 'Over';
+    applyDefensiveAttribution();
+  }
+
+  function applyDefensiveAttribution() {
+    if (editingId || attributionManuallyChanged) return;
+    const source = $('#manual-decision-source');
+    const analyst = $('#manual-analyst');
+    if (category.value === 'player_prop' && defensiveMarkets.has(market.value)) {
+      if (!source.value && !analyst.value && !$('#manual-decision-note').value.trim()) {
+        source.value = 'analyst';
+        analyst.value = 'Justin Varnes';
+        automaticDefensiveAttribution = true;
+      }
+    } else if (automaticDefensiveAttribution) {
+      source.value = '';
+      analyst.value = '';
+      automaticDefensiveAttribution = false;
+    }
+    syncManualDecisionContext();
   }
 
   function applyDefaultMarketForPosition() {
     const defaultMarket = positionMarketDefaults[$('#manual-position').value];
     if (defaultMarket && [...market.options].some(option => option.value === defaultMarket)) market.value = defaultMarket;
+    applyDefensiveAttribution();
   }
 
   function suggestedWeekForSeason(season) {
@@ -131,6 +154,8 @@
     $('#manual-decision-note').value = '';
     syncManualDecisionContext();
     editingId = null;
+    automaticDefensiveAttribution = false;
+    attributionManuallyChanged = false;
     renderMarkets();
     updateSettlementVisibility();
     applyWeekSuggestion();
@@ -240,10 +265,12 @@
 
   $('#btn-manual-bet').addEventListener('click', () => { resetForm(); modal.hidden = false; searchPlayers(); });
   category.addEventListener('change', () => renderMarkets());
+  market.addEventListener('change', applyDefensiveAttribution);
   $('#manual-position').addEventListener('change', applyDefaultMarketForPosition);
   $('#manual-season').addEventListener('change', applyWeekSuggestion);
   $('#manual-week').addEventListener('change', rememberManualWeek);
-  $('#manual-decision-source').addEventListener('change', syncManualDecisionContext);
+  $('#manual-decision-source').addEventListener('change', () => { attributionManuallyChanged = true; automaticDefensiveAttribution = false; syncManualDecisionContext(); });
+  $('#manual-analyst').addEventListener('input', () => { attributionManuallyChanged = true; automaticDefensiveAttribution = false; });
   status.addEventListener('change', updateSettlementVisibility);
   $('#manual-player').addEventListener('input', () => {
     applyPlayerSuggestion();

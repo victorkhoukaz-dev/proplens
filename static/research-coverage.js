@@ -48,7 +48,8 @@
       if (!response.ok) throw new Error(data.detail || 'Participation preview failed.');
       rows = data.records; limit = 100;
       const counts = data.participation.row_counts;
-      $('coverage-participation-summary').textContent = `Preview only — selected player-market rows: ${counts.verified_played_zero || 0} verified played-zero · ${counts.verified_nonparticipant || 0} verified nonparticipant · ${counts.unresolved || 0} unresolved. Main metrics unchanged. ` + data.participation.sources.map(source => `Snap counts fetched ${source.fetched_at}${source.used_cache ? ' (cached)' : ''}.`).join(' ') + ' ' + data.participation.warnings.join(' ');
+      const tableZeros = data.participation.zero_verification_methods?.reviewed_receiving_table || 0;
+      $('coverage-participation-summary').textContent = `Preview only — selected player-market rows: ${counts.verified_played_zero || 0} verified played-zero (${tableZeros} checked against reviewed receiving tables) · ${counts.verified_nonparticipant || 0} verified nonparticipant · ${counts.unresolved || 0} unresolved. Main metrics unchanged. ` + data.participation.sources.map(source => `Snap counts fetched ${source.fetched_at}${source.used_cache ? ' (cached)' : ''}.`).join(' ') + ' ' + data.participation.warnings.join(' ');
       render();
     } catch (error) { $('coverage-participation-summary').textContent = error.message; }
     finally { button.disabled = false; }

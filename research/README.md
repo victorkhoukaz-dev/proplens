@@ -8,9 +8,13 @@ Start here for research findings. Plans describe the workflow; reports describe 
 - Current mean-accuracy results: **in the app**, under Model research. This cleanup does not create a saved export or change report persistence.
 - [Weeks 1–3 coverage audit](2026/calibration/data-quality/through-week-03-coverage-audit.md)
 - [Participation review: batch 1](2026/calibration/data-quality/participation-review-batch-01.md)
-- [Participation review: batch 2](2026/calibration/data-quality/participation-review-batch-02.md) — latest recovery checkpoint, September 30.
+- [Participation review: batch 2](2026/calibration/data-quality/participation-review-batch-02.md) — individual-player review checkpoint, September 30.
+- [Repeatable receiving recovery: checkpoint 1](2026/calibration/data-quality/receiving-recovery-checkpoint-01.md) — initial two-game method validation.
+- [Receiving recovery: checkpoint 2](2026/calibration/data-quality/receiving-recovery-checkpoint-02.md) — latest checkpoint; 12 reviewed team tables across six games, preview only.
+- [Bulk source checkpoint](2026/calibration/data-quality/bulk-participation-source-checkpoint.md) — October 1; 260 additional candidates from a whole-backlog probe, not accepted app observations.
+- [Bulk probe details](2026/calibration/reports/through-week-03_bulk-probe_20261001T040252093588Z/report.json) — corrected run, all 12 official-table comparisons agree.
 
-Status: descriptive measurement and data-quality investigation. Verified receiving zeros are preview-only; do not assume they have entered the main metrics. Next: validate repeatable final-stat recovery. No live-model adjustment.
+Status: descriptive measurement and data-quality investigation. Verified receiving zeros are preview-only. A whole-backlog bulk source probe has found 260 additional candidates; these are not yet app classifications or main-metric observations. Next: surface bulk candidate/exception groups in the preview and investigate the participation gaps. No live-model adjustment.
 
 ## Betting process — how are our betting decisions performing?
 
